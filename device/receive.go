@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amnezia-vpn/amnezia-wg/conn"
+	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -145,7 +145,7 @@ func (device *Device) RoutineReceiveIncoming(
 					junkSize := msgTypeToJunkSize[assumedMsgType]
 					// transport size can align with other header types;
 					// making sure we have the right msgType
-					msgType = binary.LittleEndian.Uint32(packet[junkSize:junkSize+4])
+					msgType = binary.LittleEndian.Uint32(packet[junkSize : junkSize+4])
 					if msgType == assumedMsgType {
 						packet = packet[junkSize:]
 					} else {

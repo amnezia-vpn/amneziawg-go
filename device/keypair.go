@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/amnezia-vpn/amnezia-wg/replay"
+	"github.com/amnezia-vpn/amneziawg-go/replay"
 )
 
 /* Due to limitations in Go and /x/crypto there is currently

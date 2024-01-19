@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amnezia-vpn/amnezia-wg/conn"
-	"github.com/amnezia-vpn/amnezia-wg/conn/bindtest"
-	"github.com/amnezia-vpn/amnezia-wg/tun"
-	"github.com/amnezia-vpn/amnezia-wg/tun/tuntest"
+	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/conn/bindtest"
+	"github.com/amnezia-vpn/amneziawg-go/tun"
+	"github.com/amnezia-vpn/amneziawg-go/tun/tuntest"
 )
 
 // uapiCfg returns a string that contains cfg formatted use with IpcSet.
@@ -237,7 +237,7 @@ func genTestPair(
 		if _, ok := tb.(*testing.B); ok && !testing.Verbose() {
 			level = LogLevelError
 		}
-		p.dev = NewDevice(p.tun.TUN(),binds[i],NewLogger(level, fmt.Sprintf("dev%d: ", i)))
+		p.dev = NewDevice(p.tun.TUN(), binds[i], NewLogger(level, fmt.Sprintf("dev%d: ", i)))
 		if err := p.dev.IpcSet(cfg[i]); err != nil {
 			tb.Errorf("failed to configure device %d: %v", i, err)
 			p.dev.Close()
@@ -294,7 +294,7 @@ func TestUpDown(t *testing.T) {
 		pair := genTestPair(t, false, false)
 		for i := range pair {
 			for k := range pair[i].dev.peers.keyMap {
-				pair[i].dev.IpcSet(fmt.Sprintf("public_key=%s\npersistent_keepalive_interval=1\n",hex.EncodeToString(k[:])))
+				pair[i].dev.IpcSet(fmt.Sprintf("public_key=%s\npersistent_keepalive_interval=1\n", hex.EncodeToString(k[:])))
 			}
 		}
 		var wg sync.WaitGroup
@@ -513,7 +513,7 @@ func (b *fakeBindSized) Open(
 
 func (b *fakeBindSized) Close() error { return nil }
 
-func (b *fakeBindSized) SetMark(mark uint32) error {return nil }
+func (b *fakeBindSized) SetMark(mark uint32) error { return nil }
 
 func (b *fakeBindSized) Send(bufs [][]byte, ep conn.Endpoint) error { return nil }
 
@@ -527,7 +527,9 @@ type fakeTUNDeviceSized struct {
 
 func (t *fakeTUNDeviceSized) File() *os.File { return nil }
 
-func (t *fakeTUNDeviceSized) Read(bufs [][]byte, sizes []int, offset int) (n int, err error) { return 0, nil }
+func (t *fakeTUNDeviceSized) Read(bufs [][]byte, sizes []int, offset int) (n int, err error) {
+	return 0, nil
+}
 
 func (t *fakeTUNDeviceSized) Write(bufs [][]byte, offset int) (int, error) { return 0, nil }
 

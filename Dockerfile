@@ -8,13 +8,13 @@ RUN go mod download && \
 FROM alpine:3.15 as awg-tools
 ARG AWGTOOLS_RELEASE="1.0.20231215"
 RUN apk --no-cache add linux-headers build-base bash && \
-    wget https://github.com/amnezia-vpn/amnezia-wg-tools/archive/refs/tags/v${AWGTOOLS_RELEASE}.zip && \
+    wget https://github.com/amnezia-vpn/amneziawg-tools/archive/refs/tags/v${AWGTOOLS_RELEASE}.zip && \
     unzip v${AWGTOOLS_RELEASE}.zip && \
-    cd amnezia-wg-tools-${AWGTOOLS_RELEASE}/src && \
+    cd amneziawg-tools-${AWGTOOLS_RELEASE}/src && \
     make -e LDFLAGS=-static && \
     make install
 
 FROM alpine:3.15
 RUN apk --no-cache add iproute2 bash
-COPY --from=awg /usr/bin/amnezia-wg /usr/bin/wireguard-go
-COPY --from=awg-tools /usr/bin/wg /usr/bin/wg-quick /usr/bin/
+COPY --from=awg /usr/bin/amneziawg-go /usr/bin/amneziawg-go
+COPY --from=awg-tools /usr/bin/awg /usr/bin/awg-quick /usr/bin/
