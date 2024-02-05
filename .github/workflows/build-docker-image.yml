@@ -6,7 +6,7 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
 env:
-  APP: amneziawg-backend
+  REPOSITORY: amneziawg-backend
 
 jobs:
   build:
@@ -26,7 +26,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: amneziavpn/${{ env.APP }}
+          images: amneziavpn/${{ env.REPOSITORY }}
           tags: type=semver,pattern={{version}}
 
       - name: Set up Docker Buildx
