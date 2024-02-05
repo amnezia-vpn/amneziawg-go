@@ -21,3 +21,9 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: amneziavpn/${{ env.APP }}
+          tags: type=semver,pattern={{version}}
