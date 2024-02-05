@@ -26,7 +26,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: amneziavpn/${{ env.APP }}
+          images: alexandergalkov/test
           tags: type=semver,pattern={{version}}
 
       - name: Set up Docker Buildx
