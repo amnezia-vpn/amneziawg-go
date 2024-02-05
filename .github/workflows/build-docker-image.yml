@@ -23,6 +23,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Setup metadata
+        id: metadata
         uses: docker/metadata-action@v5
         with:
           images: amneziavpn/${{ env.APP }}
@@ -35,4 +36,5 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          tags: ${{ steps.metadata.outputs.tags }}
           push: true
