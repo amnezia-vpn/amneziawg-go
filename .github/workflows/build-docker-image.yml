@@ -10,8 +10,8 @@ env:
 
 jobs:
   build:
+    name: build-docker-image
     runs-on: ubuntu-latest
-    name: build
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,3 +27,6 @@ jobs:
         with:
           images: amneziavpn/${{ env.APP }}
           tags: type=semver,pattern={{version}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
