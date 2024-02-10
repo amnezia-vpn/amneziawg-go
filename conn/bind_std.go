@@ -298,6 +298,11 @@ func (s *StdNetBind) BatchSize() int {
 	return 1
 }
 
+func (s *StdNetBind) GetOffloadInfo() string {
+	return fmt.Sprintf("ipv4TxOffload: %v, ipv4RxOffload: %v\nipv6TxOffload: %v, ipv6RxOffload: %v",
+		s.ipv4TxOffload, s.ipv4RxOffload, s.ipv6TxOffload, s.ipv6RxOffload)
+}
+
 func (s *StdNetBind) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

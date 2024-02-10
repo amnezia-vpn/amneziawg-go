@@ -55,6 +55,8 @@ type Bind interface {
 	// BatchSize is the number of buffers expected to be passed to
 	// the ReceiveFuncs, and the maximum expected to be passed to SendBatch.
 	BatchSize() int
+
+	GetOffloadInfo() string
 }
 
 // BindSocketToInterface is implemented by Bind objects that support being

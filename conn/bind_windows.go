@@ -328,6 +328,10 @@ func (bind *WinRingBind) BatchSize() int {
 	return 1
 }
 
+func (bind *WinRingBind) GetOffloadInfo() string {
+	return ""
+}
+
 func (bind *WinRingBind) SetMark(mark uint32) error {
 	return nil
 }

@@ -91,6 +91,8 @@ func (c *ChannelBind) Close() error {
 
 func (c *ChannelBind) BatchSize() int { return 1 }
 
+func (c *ChannelBind) GetOffloadInfo() string { return "" }
+
 func (c *ChannelBind) SetMark(mark uint32) error { return nil }
 
 func (c *ChannelBind) makeReceiveFunc(ch chan []byte) conn.ReceiveFunc {

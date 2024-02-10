@@ -545,6 +545,7 @@ func (device *Device) BindUpdate() error {
 	}
 
 	device.log.Verbosef("UDP bind has been updated")
+	device.log.Verbosef(netc.bind.GetOffloadInfo())
 	return nil
 }
 
