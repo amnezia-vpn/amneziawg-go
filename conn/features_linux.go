@@ -19,8 +19,10 @@ func supportsUDPOffload(conn *net.UDPConn) (txOffload, rxOffload bool) {
 	err = rc.Control(func(fd uintptr) {
 		_, errSyscall := unix.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_SEGMENT)
 		txOffload = errSyscall == nil
-		opt, errSyscall := unix.GetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO)
-		rxOffload = errSyscall == nil && opt == 1
+		// getsockopt(IPPROTO_UDP, UDP_GRO) is not supported in android
+		// use setsockopt workaround
+		errSyscall = unix.SetsockoptInt(int(fd), unix.IPPROTO_UDP, unix.UDP_GRO, 1)
+		rxOffload = errSyscall == nil
 	})
 	if err != nil {
 		return false, false
