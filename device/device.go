@@ -562,6 +562,11 @@ func (device *Device) isAdvancedSecurityOn() bool {
 func (device *Device) handlePostConfig(tempASecCfg *aSecCfgType) (err error) {
 
 	if !tempASecCfg.isSet {
+		// restore default values
+		MessageInitiationType = 1
+		MessageResponseType = 2
+		MessageCookieReplyType = 3
+		MessageTransportType = 4
 		return err
 	}
 
