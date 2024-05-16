@@ -556,12 +556,14 @@ func (device *Device) RoutineEncryption(id int) {
 			// encrypt content and release to consumer
 
 			binary.LittleEndian.PutUint64(nonce[4:], elem.nonce)
-			elem.packet = elem.keypair.send.Seal(
-				header,
-				nonce[:],
-				elem.packet,
-				nil,
-			)
+			if device.udpMode {
+				elem.packet = elem.keypair.send.Seal(
+					header,
+					nonce[:],
+					elem.packet,
+					nil,
+				)
+			}
 		}
 		elemsContainer.Unlock()
 	}

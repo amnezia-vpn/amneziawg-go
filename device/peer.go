@@ -7,7 +7,10 @@ package device
 
 import (
 	"container/list"
+	"context"
 	"errors"
+	"fmt"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -186,6 +189,28 @@ func (peer *Peer) Start() {
 
 	device := peer.device
 	device.log.Verbosef("%v - Starting", peer)
+
+	if !device.udpMode && !device.serverMode {
+		device.log.Verbosef("Starting udptlspipe")
+
+		if device.udptlspipe != nil {
+			device.udptlspipe.Shutdown(context.TODO())
+		}
+
+		oldEndpoint, _ := netip.ParseAddrPort(peer.endpoint.val.DstToString())
+		peer.endpoint.val, _ = device.net.bind.ParseEndpoint(fmt.Sprintf("127.0.0.1:%d", oldEndpoint.Port()))
+
+		srv, err := device.StartUDPTLSPipe(
+			false,
+			fmt.Sprintf("127.0.0.1:%d", oldEndpoint.Port()),
+			fmt.Sprintf("%s:443", oldEndpoint.Addr().String()),
+		)
+		if err != nil {
+			return
+		}
+
+		device.udptlspipe = srv
+	}
 
 	// reset routine state
 	peer.stopping.Wait()

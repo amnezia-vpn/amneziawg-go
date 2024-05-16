@@ -39,7 +39,7 @@ func randDevice(t *testing.T) *Device {
 	}
 	tun := tuntest.NewChannelTUN()
 	logger := NewLogger(LogLevelError, "")
-	device := NewDevice(tun.TUN(), conn.NewDefaultBind(), logger)
+	device := NewDevice(tun.TUN(), conn.NewDefaultBind(), logger, true)
 	device.SetPrivateKey(sk)
 	return device
 }

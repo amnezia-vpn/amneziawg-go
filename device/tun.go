@@ -11,7 +11,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 )
 
-const DefaultMTU = 1420
+const DefaultMTU = 1280
 
 func (device *Device) RoutineTUNEventReader() {
 	device.log.Verbosef("Routine: event worker - started")

@@ -33,7 +33,7 @@ const (
 )
 
 func printUsage() {
-	fmt.Printf("Usage: %s [-f/--foreground] INTERFACE-NAME\n", os.Args[0])
+	fmt.Printf("Usage: %s [-f/--foreground] [-u/--udptlspipe] INTERFACE-NAME\n", os.Args[0])
 }
 
 func warning() {
@@ -65,30 +65,30 @@ func main() {
 
 	warning()
 
-	var foreground bool
-	var interfaceName string
-	if len(os.Args) < 2 || len(os.Args) > 3 {
+	var foreground = false
+	var udp = false
+	var interfaceName = ""
+	if len(os.Args) < 2 || len(os.Args) > 4 {
 		printUsage()
 		return
 	}
 
-	switch os.Args[1] {
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "-f", "--foreground":
+			foreground = true
 
-	case "-f", "--foreground":
-		foreground = true
-		if len(os.Args) != 3 {
-			printUsage()
-			return
-		}
-		interfaceName = os.Args[2]
+		case "-u", "--udp":
+			udp = true
 
-	default:
-		foreground = false
-		if len(os.Args) != 2 {
-			printUsage()
-			return
+		default:
+			interfaceName = arg
 		}
-		interfaceName = os.Args[1]
+	}
+
+	if interfaceName == "" {
+		printUsage()
+		return
 	}
 
 	if !foreground {
@@ -222,7 +222,7 @@ func main() {
 		return
 	}
 
-	device := device.NewDevice(tdev, conn.NewDefaultBind(), logger)
+	device := device.NewDevice(tdev, conn.NewDefaultBind(), logger, udp)
 
 	logger.Verbosef("Device started")
 
