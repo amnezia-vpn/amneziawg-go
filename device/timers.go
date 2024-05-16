@@ -78,6 +78,7 @@ func (peer *Peer) timersActive() bool {
 
 func expiredRetransmitHandshake(peer *Peer) {
 	if peer.timers.handshakeAttempts.Load() > MaxTimerHandshakes {
+		peer.device.handshakeStateChan <- HandshakeFail
 		peer.device.log.Verbosef("%s - Handshake did not complete after %d attempts, giving up", peer, MaxTimerHandshakes+2)
 
 		if peer.timersActive() {
@@ -97,6 +98,7 @@ func expiredRetransmitHandshake(peer *Peer) {
 		}
 	} else {
 		peer.timers.handshakeAttempts.Add(1)
+		peer.device.handshakeStateChan <- HandshakeFail
 		peer.device.log.Verbosef("%s - Handshake did not complete after %d seconds, retrying (try %d)", peer, int(RekeyTimeout.Seconds()), peer.timers.handshakeAttempts.Load()+1)
 
 		/* We clear the endpoint address src address, in case this is the cause of trouble. */

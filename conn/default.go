@@ -7,4 +7,6 @@
 
 package conn
 
-func NewDefaultBind() Bind { return NewStdNetBind() }
+func NewDefaultBind(logger *Logger, errorChan chan<- error) Bind {
+	return CreateStdNetBind("tls", logger, errorChan)
+}

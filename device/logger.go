@@ -6,6 +6,7 @@
 package device
 
 import (
+	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"log"
 	"os"
 )
@@ -16,8 +17,7 @@ import (
 // They do not require a trailing newline in the format.
 // If nil, that level of logging will be silent.
 type Logger struct {
-	Verbosef func(format string, args ...any)
-	Errorf   func(format string, args ...any)
+	conn.Logger
 }
 
 // Log levels for use with NewLogger.
@@ -34,7 +34,7 @@ func DiscardLogf(format string, args ...any) {}
 // It logs at the specified log level and above.
 // It decorates log lines with the log level, date, time, and prepend.
 func NewLogger(level int, prepend string) *Logger {
-	logger := &Logger{DiscardLogf, DiscardLogf}
+	logger := &Logger{conn.Logger{Verbosef: DiscardLogf, Errorf: DiscardLogf}}
 	logf := func(prefix string) func(string, ...any) {
 		return log.New(os.Stdout, prefix+": "+prepend, log.Ldate|log.Ltime).Printf
 	}

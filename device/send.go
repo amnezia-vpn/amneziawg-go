@@ -175,6 +175,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	err = peer.SendBuffers(sendBuffer)
 	if err != nil {
+		peer.device.handshakeStateChan <- HandshakeFail
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
 	}
 	peer.timersHandshakeInitiated()
@@ -318,12 +319,14 @@ func (device *Device) RoutineReadFromTUN() {
 
 			// lookup peer
 			var peer *Peer
+			var src []byte
 			switch elem.packet[0] >> 4 {
 			case 4:
 				if len(elem.packet) < ipv4.HeaderLen {
 					continue
 				}
 				dst := elem.packet[IPv4offsetDst : IPv4offsetDst+net.IPv4len]
+				src = elem.packet[IPv4offsetSrc : IPv4offsetSrc+net.IPv4len]
 				peer = device.allowedips.Lookup(dst)
 
 			case 6:
@@ -331,6 +334,7 @@ func (device *Device) RoutineReadFromTUN() {
 					continue
 				}
 				dst := elem.packet[IPv6offsetDst : IPv6offsetDst+net.IPv6len]
+				src = elem.packet[IPv6offsetSrc : IPv6offsetSrc+net.IPv6len]
 				peer = device.allowedips.Lookup(dst)
 
 			default:
@@ -340,6 +344,13 @@ func (device *Device) RoutineReadFromTUN() {
 			if peer == nil {
 				continue
 			}
+
+			// Drop packets with unexpected src IP.
+			if device.allowedSrcAddresses != nil && device.isUnexpectedSrcIP(src) {
+				//device.log.Verbosef("Dropping packet with unexpected src IP: %v (allowed = %v)", src, device.allowedSrcAddresses)
+				continue
+			}
+
 			elemsForPeer, ok := elemsByPeer[peer]
 			if !ok {
 				elemsForPeer = device.GetOutboundElementsContainer()
@@ -381,6 +392,15 @@ func (device *Device) RoutineReadFromTUN() {
 			return
 		}
 	}
+}
+
+func (device *Device) isUnexpectedSrcIP(src []byte) bool {
+	for _, allowed := range device.allowedSrcAddresses {
+		if allowed.Equal(src) {
+			return false
+		}
+	}
+	return true
 }
 
 func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {

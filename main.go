@@ -222,11 +222,11 @@ func main() {
 		return
 	}
 
-	device := device.NewDevice(tdev, conn.NewDefaultBind(), logger)
+	errs := make(chan error)
+	device := device.NewDevice(tdev, conn.NewDefaultBind(&logger.Logger, errs), logger, make(chan device.HandshakeState))
 
 	logger.Verbosef("Device started")
 
-	errs := make(chan error)
 	term := make(chan os.Signal, 1)
 
 	uapi, err := ipc.UAPIListen(interfaceName, fileUAPI)

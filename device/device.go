@@ -6,6 +6,7 @@
 package device
 
 import (
+	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -95,6 +96,9 @@ type Device struct {
 	isASecOn abool.AtomicBool
 	aSecMux  sync.RWMutex
 	aSecCfg  aSecCfgType
+
+	handshakeStateChan  chan<- HandshakeState
+	allowedSrcAddresses []net.IP
 }
 
 type aSecCfgType struct {
@@ -109,6 +113,14 @@ type aSecCfgType struct {
 	underloadPacketMagicHeader uint32
 	transportPacketMagicHeader uint32
 }
+
+type HandshakeState int
+
+const (
+	HandshakeInit    HandshakeState = iota
+	HandshakeSuccess                = iota
+	HandshakeFail                   = iota
+)
 
 // deviceState represents the state of a Device.
 // There are three states: down, up, closed.
@@ -189,6 +201,7 @@ func (device *Device) changeState(want deviceState) (err error) {
 // upLocked attempts to bring the device up and reports whether it succeeded.
 // The caller must hold device.state.mu and is responsible for updating device.state.state.
 func (device *Device) upLocked() error {
+	device.handshakeStateChan <- HandshakeInit
 	if err := device.BindUpdate(); err != nil {
 		device.log.Errorf("Unable to update bind: %v", err)
 		return err
@@ -301,9 +314,18 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	return nil
 }
 
-func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
+func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, handshakeStateChan chan<- HandshakeState /*, allowedSrcAddresses string*/) *Device {
 	device := new(Device)
 	device.state.state.Store(uint32(deviceStateDown))
+	device.handshakeStateChan = handshakeStateChan
+	/*var allowedSources = strings.Split(allowedSrcAddresses, ",")
+	device.allowedSrcAddresses = make([]net.IP, len(allowedSources))
+	for i, source := range allowedSources {
+		ip := net.ParseIP(source)
+		if ip != nil {
+			device.allowedSrcAddresses[i] = ip
+		}
+	}*/
 	device.closed = make(chan struct{})
 	device.log = logger
 	device.net.bind = bind
@@ -419,6 +441,7 @@ func (device *Device) Close() {
 
 	device.log.Verbosef("Device closed")
 	close(device.closed)
+	close(device.handshakeStateChan)
 }
 
 func (device *Device) Wait() chan struct{} {
