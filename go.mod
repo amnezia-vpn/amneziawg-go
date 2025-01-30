@@ -14,4 +14,5 @@ require (
 require (
 	github.com/google/btree v1.0.1 // indirect
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
+	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
 )
