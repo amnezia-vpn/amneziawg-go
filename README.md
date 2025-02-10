@@ -53,5 +53,5 @@ $ make
 
 ## Submodule Changes
 
-Due to some critical and high severity found at outdated `crypto 0.21.0` and `net 0.21.0` golang modules, all required submodules at `go.mod` and hashes at `go.sum` were updated.
+Due to some critical and highly severe vulnerabilities found at outdated `crypto 0.21.0` and `net 0.21.0` golang modules, all required submodules at `go.mod` and hashes at `go.sum` were updated.
 Dockerfile also updates to `golang:1.23.6` and `AWGTOOLS_RELEASE=1.0.20241018`
