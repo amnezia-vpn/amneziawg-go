@@ -52,11 +52,18 @@ const (
 	WGLabelCookie     = "cookie--"
 )
 
+const (
+	DefaultMessageInitiationType  uint32 = 1
+	DefaultMessageResponseType    uint32 = 2
+	DefaultMessageCookieReplyType uint32 = 3
+	DefaultMessageTransportType   uint32 = 4
+)
+
 var (
-	MessageInitiationType  uint32 = 1
-	MessageResponseType    uint32 = 2
-	MessageCookieReplyType uint32 = 3
-	MessageTransportType   uint32 = 4
+	MessageInitiationType   uint32 = DefaultMessageInitiationType  
+	MessageResponseType     uint32 = DefaultMessageResponseType    
+	MessageCookieReplyType  uint32 = DefaultMessageCookieReplyType 
+	MessageTransportType    uint32 = DefaultMessageTransportType   
 )
 
 const (
@@ -197,12 +204,12 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(handshake.remoteStatic[:])
 
-	device.aSecMux.RLock()
+	device.awg.mutex.RLock()
 	msg := MessageInitiation{
 		Type:      MessageInitiationType,
 		Ephemeral: handshake.localEphemeral.publicKey(),
 	}
-	device.aSecMux.RUnlock()
+	device.awg.mutex.RUnlock()
 
 	handshake.mixKey(msg.Ephemeral[:])
 	handshake.mixHash(msg.Ephemeral[:])
@@ -256,12 +263,12 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 		chainKey [blake2s.Size]byte
 	)
 
-	device.aSecMux.RLock()
+	device.awg.mutex.RLock()
 	if msg.Type != MessageInitiationType {
-		device.aSecMux.RUnlock()
+		device.awg.mutex.RUnlock()
 		return nil
 	}
-	device.aSecMux.RUnlock()
+	device.awg.mutex.RUnlock()
 
 	device.staticIdentity.RLock()
 	defer device.staticIdentity.RUnlock()
@@ -376,9 +383,9 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 	}
 
 	var msg MessageResponse
-	device.aSecMux.RLock()
+	device.awg.mutex.RLock()
 	msg.Type = MessageResponseType
-	device.aSecMux.RUnlock()
+	device.awg.mutex.RUnlock()
 	msg.Sender = handshake.localIndex
 	msg.Receiver = handshake.remoteIndex
 
@@ -428,12 +435,12 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 }
 
 func (device *Device) ConsumeMessageResponse(msg *MessageResponse) *Peer {
-	device.aSecMux.RLock()
+	device.awg.mutex.RLock()
 	if msg.Type != MessageResponseType {
-		device.aSecMux.RUnlock()
+		device.awg.mutex.RUnlock()
 		return nil
 	}
-	device.aSecMux.RUnlock()
+	device.awg.mutex.RUnlock()
 
 	// lookup handshake by receiver
 

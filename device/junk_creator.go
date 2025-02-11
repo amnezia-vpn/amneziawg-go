@@ -23,12 +23,12 @@ func NewJunkCreator(d *Device) (junkCreator, error) {
 
 // Should be called with aSecMux RLocked
 func (jc *junkCreator) createJunkPackets(peer *Peer) ([][]byte, error) {
-	if jc.device.aSecCfg.junkPacketCount == 0 {
+	if jc.device.awg.aSecCfg.junkPacketCount == 0 {
 		return nil, nil
 	}
 
-	junks := make([][]byte, 0, jc.device.aSecCfg.junkPacketCount)
-	for i := 0; i < jc.device.aSecCfg.junkPacketCount; i++ {
+	junks := make([][]byte, 0, jc.device.awg.aSecCfg.junkPacketCount)
+	for i := 0; i < jc.device.awg.aSecCfg.junkPacketCount; i++ {
 		packetSize := jc.randomPacketSize()
 		junk, err := jc.randomJunkWithSize(packetSize)
 		if err != nil {
@@ -48,9 +48,9 @@ func (jc *junkCreator) createJunkPackets(peer *Peer) ([][]byte, error) {
 func (jc *junkCreator) randomPacketSize() int {
 	return int(
 		jc.cha8Rand.Uint64()%uint64(
-			jc.device.aSecCfg.junkPacketMaxSize-jc.device.aSecCfg.junkPacketMinSize,
+			jc.device.awg.aSecCfg.junkPacketMaxSize-jc.device.awg.aSecCfg.junkPacketMinSize,
 		),
-	) + jc.device.aSecCfg.junkPacketMinSize
+	) + jc.device.awg.aSecCfg.junkPacketMinSize
 }
 
 // Should be called with aSecMux RLocked

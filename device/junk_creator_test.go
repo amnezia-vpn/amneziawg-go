@@ -91,13 +91,13 @@ func Test_junkCreator_randomPacketSize(t *testing.T) {
 	}
 	for range [30]struct{}{} {
 		t.Run("", func(t *testing.T) {
-			if got := jc.randomPacketSize(); jc.device.aSecCfg.junkPacketMinSize > got ||
-				got > jc.device.aSecCfg.junkPacketMaxSize {
+			if got := jc.randomPacketSize(); jc.device.awg.aSecCfg.junkPacketMinSize > got ||
+				got > jc.device.awg.aSecCfg.junkPacketMaxSize {
 				t.Errorf(
 					"junkCreator.randomPacketSize() = %v, not between range [%v,%v]",
 					got,
-					jc.device.aSecCfg.junkPacketMinSize,
-					jc.device.aSecCfg.junkPacketMaxSize,
+					jc.device.awg.aSecCfg.junkPacketMinSize,
+					jc.device.awg.aSecCfg.junkPacketMaxSize,
 				)
 			}
 		})

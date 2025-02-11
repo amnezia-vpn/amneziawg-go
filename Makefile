@@ -17,7 +17,7 @@ generate-version-and-build:
 	@$(MAKE) amneziawg-go
 
 amneziawg-go: $(wildcard *.go) $(wildcard */*.go)
-	go build -v -o "$@"
+	go build -tags luajit -v -o "$@"
 
 install: amneziawg-go
 	@install -v -d "$(DESTDIR)$(BINDIR)" && install -v -m 0755 "$<" "$(DESTDIR)$(BINDIR)/amneziawg-go"

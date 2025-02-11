@@ -129,23 +129,34 @@ func (device *Device) RoutineReceiveIncoming(
 		}
 		deathSpiral = 0
 
-		device.aSecMux.RLock()
+		device.awg.mutex.RLock()
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
 			if size < MinMessageSize {
 				continue
 			}
 
-			// check size of packet
-
 			packet := bufsArrs[i][:size]
+			if device.isCodecActive() {
+				realPacket, err := device.awg.codec.Parse(packet)
+				copy(packet, realPacket)
+				size = len(realPacket)
+				packet = bufsArrs[i][:size]
+				if err != nil {
+					device.log.Verbosef(
+						"Couldn't parse message; reason: %v",
+						err,
+					)
+					continue
+				}
+			}
 			var msgType uint32
 			if device.isAdvancedSecurityOn() {
 				if assumedMsgType, ok := packetSizeToMsgType[size]; ok {
 					junkSize := msgTypeToJunkSize[assumedMsgType]
 					// transport size can align with other header types;
 					// making sure we have the right msgType
-					msgType = binary.LittleEndian.Uint32(packet[junkSize : junkSize+4])
+					msgType = binary.LittleEndian.Uint32(packet[junkSize:junkSize+4])
 					if msgType == assumedMsgType {
 						packet = packet[junkSize:]
 					} else {
@@ -245,7 +256,7 @@ func (device *Device) RoutineReceiveIncoming(
 			default:
 			}
 		}
-		device.aSecMux.RUnlock()
+		device.awg.mutex.RUnlock()
 		for peer, elemsContainer := range elemsByPeer {
 			if peer.isRunning.Load() {
 				peer.queue.inbound.c <- elemsContainer
@@ -285,6 +296,7 @@ func (device *Device) RoutineDecryption(id int) {
 				content,
 				nil,
 			)
+
 			if err != nil {
 				elem.packet = nil
 			}
@@ -304,7 +316,7 @@ func (device *Device) RoutineHandshake(id int) {
 
 	for elem := range device.queue.handshake.c {
 
-		device.aSecMux.RLock()
+		device.awg.mutex.RLock()
 
 		// handle cookie fields and ratelimiting
 
@@ -456,7 +468,7 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.SendKeepalive()
 		}
 	skip:
-		device.aSecMux.RUnlock()
+		device.awg.mutex.RUnlock()
 		device.PutMessageBuffer(elem.buffer)
 	}
 }

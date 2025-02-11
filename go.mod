@@ -3,6 +3,7 @@ module github.com/amnezia-vpn/amneziawg-go
 go 1.23
 
 require (
+	github.com/aarzilli/golua v0.0.0-20241229084300-cd31ab23902e
 	github.com/tevino/abool/v2 v2.1.0
 	golang.org/x/crypto v0.21.0
 	golang.org/x/net v0.21.0
