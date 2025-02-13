@@ -12,6 +12,8 @@ require (
 	gvisor.dev/gvisor v0.0.0-20230927004350-cbd86285d259
 )
 
+replace github.com/aarzilli/golua v0.0.0-20241229084300-cd31ab23902e => github.com/marko1777/golua v0.1.0
+
 require (
 	github.com/google/btree v1.0.1 // indirect
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
