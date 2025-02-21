@@ -27,6 +27,10 @@ const (
 // socketDirectory is variable because it is modified by a linker
 // flag in wireguard-android.
 var socketDirectory = "/var/run/amneziawg"
+// For android work profile
+func SetSocketDirectory(directory string) {
+	socketDirectory = directory
+}
 
 func sockPath(iface string) string {
 	return fmt.Sprintf("%s/%s.sock", socketDirectory, iface)
