@@ -130,23 +130,6 @@ type Device struct {
 
 	version Version
 	awg     awg.Protocol
-	isASecOn    abool.AtomicBool
-	aSecMux     sync.RWMutex
-	aSecCfg     aSecCfgType
-	junkCreator junkCreator
-}
-
-type aSecCfgType struct {
-	isSet                      bool
-	junkPacketCount            int
-	junkPacketMinSize          int
-	junkPacketMaxSize          int
-	initPacketJunkSize         int
-	responsePacketJunkSize     int
-	initPacketMagicHeader      uint32
-	responsePacketMagicHeader  uint32
-	underloadPacketMagicHeader uint32
-	transportPacketMagicHeader uint32
 }
 
 // deviceState represents the state of a Device.
