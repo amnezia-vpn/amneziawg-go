@@ -63,17 +63,17 @@ func ParseMagicHeader(key, value string, defaultHeaderType uint32) (Limit, error
 
 	min, err := strconv.ParseUint(limits[0], 10, 32)
 	if err != nil {
-		return Limit{}, fmt.Errorf("parse min key: %s; value: ; %w", key, limits[0], err)
+		return Limit{}, fmt.Errorf("parse min key: %s; value: %s; %w", key, limits[0], err)
 	}
 
 	max, err := strconv.ParseUint(limits[1], 10, 32)
 	if err != nil {
-		return Limit{}, fmt.Errorf("parse max key: %s; value: ; %w", key, limits[0], err)
+		return Limit{}, fmt.Errorf("parse max key: %s; value: %s; %w", key, limits[1], err)
 	}
 
 	limit, err := NewLimit(uint32(min), uint32(max), defaultHeaderType)
 	if err != nil {
-		return Limit{}, fmt.Errorf("new lmit key: %s; value: ; %w", key, limits[0], err)
+		return Limit{}, fmt.Errorf("new limit key: %s; value: %s-%s; %w", key, limits[0], limits[1], err)
 	}
 
 	return limit, nil
