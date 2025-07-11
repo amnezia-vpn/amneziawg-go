@@ -1,4 +1,4 @@
-FROM golang:1.24 as awg
+FROM golang:1.24.4 as awg
 COPY . /awg
 WORKDIR /awg
 RUN go mod download && \
@@ -7,6 +7,7 @@ RUN go mod download && \
 
 FROM alpine:3.19
 ARG AWGTOOLS_RELEASE="1.0.20241018"
+
 RUN apk --no-cache add iproute2 iptables bash && \
     cd /usr/bin/ && \
     wget https://github.com/amnezia-vpn/amneziawg-tools/releases/download/v${AWGTOOLS_RELEASE}/alpine-3.19-amneziawg-tools.zip && \

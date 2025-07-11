@@ -50,3 +50,4 @@ $ git clone https://github.com/amnezia-vpn/amneziawg-go
 $ cd amneziawg-go
 $ make
 ```
+ 

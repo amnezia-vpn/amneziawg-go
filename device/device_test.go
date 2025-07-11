@@ -1,24 +1,27 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/netip"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/pprof"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/atomic"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/conn/bindtest"
@@ -50,7 +53,7 @@ func uapiCfg(cfg ...string) string {
 
 // genConfigs generates a pair of configs that connect to each other.
 // The configs use distinct, probably-usable ports.
-func genConfigs(tb testing.TB) (cfgs, endpointCfgs [2]string) {
+func genConfigs(tb testing.TB, cfg ...string) (cfgs, endpointCfgs [2]string) {
 	var key1, key2 NoisePrivateKey
 	_, err := rand.Read(key1[:])
 	if err != nil {
@@ -62,7 +65,8 @@ func genConfigs(tb testing.TB) (cfgs, endpointCfgs [2]string) {
 	}
 	pub1, pub2 := key1.publicKey(), key2.publicKey()
 
-	cfgs[0] = uapiCfg(
+	args0 := append([]string(nil), cfg...)
+	args0 = append(args0, []string{
 		"private_key", hex.EncodeToString(key1[:]),
 		"listen_port", "0",
 		"replace_peers", "true",
@@ -70,12 +74,16 @@ func genConfigs(tb testing.TB) (cfgs, endpointCfgs [2]string) {
 		"protocol_version", "1",
 		"replace_allowed_ips", "true",
 		"allowed_ip", "1.0.0.2/32",
-	)
+	}...)
+	cfgs[0] = uapiCfg(args0...)
+
 	endpointCfgs[0] = uapiCfg(
 		"public_key", hex.EncodeToString(pub2[:]),
 		"endpoint", "127.0.0.1:%d",
 	)
-	cfgs[1] = uapiCfg(
+
+	args1 := append([]string(nil), cfg...)
+	args1 = append(args1, []string{
 		"private_key", hex.EncodeToString(key2[:]),
 		"listen_port", "0",
 		"replace_peers", "true",
@@ -83,66 +91,9 @@ func genConfigs(tb testing.TB) (cfgs, endpointCfgs [2]string) {
 		"protocol_version", "1",
 		"replace_allowed_ips", "true",
 		"allowed_ip", "1.0.0.1/32",
-	)
-	endpointCfgs[1] = uapiCfg(
-		"public_key", hex.EncodeToString(pub1[:]),
-		"endpoint", "127.0.0.1:%d",
-	)
-	return
-}
+	}...)
 
-func genASecurityConfigs(tb testing.TB) (cfgs, endpointCfgs [2]string) {
-	var key1, key2 NoisePrivateKey
-	_, err := rand.Read(key1[:])
-	if err != nil {
-		tb.Errorf("unable to generate private key random bytes: %v", err)
-	}
-	_, err = rand.Read(key2[:])
-	if err != nil {
-		tb.Errorf("unable to generate private key random bytes: %v", err)
-	}
-	pub1, pub2 := key1.publicKey(), key2.publicKey()
-
-	cfgs[0] = uapiCfg(
-		"private_key", hex.EncodeToString(key1[:]),
-		"listen_port", "0",
-		"replace_peers", "true",
-		"jc", "5",
-		"jmin", "500",
-		"jmax", "1000",
-		"s1", "30",
-		"s2", "40",
-		"h1", "123456",
-		"h2", "67543",
-		"h4", "32345",
-		"h3", "123123",
-		"public_key", hex.EncodeToString(pub2[:]),
-		"protocol_version", "1",
-		"replace_allowed_ips", "true",
-		"allowed_ip", "1.0.0.2/32",
-	)
-	endpointCfgs[0] = uapiCfg(
-		"public_key", hex.EncodeToString(pub2[:]),
-		"endpoint", "127.0.0.1:%d",
-	)
-	cfgs[1] = uapiCfg(
-		"private_key", hex.EncodeToString(key2[:]),
-		"listen_port", "0",
-		"replace_peers", "true",
-		"jc", "5",
-		"jmin", "500",
-		"jmax", "1000",
-		"s1", "30",
-		"s2", "40",
-		"h1", "123456",
-		"h2", "67543",
-		"h4", "32345",
-		"h3", "123123",
-		"public_key", hex.EncodeToString(pub1[:]),
-		"protocol_version", "1",
-		"replace_allowed_ips", "true",
-		"allowed_ip", "1.0.0.1/32",
-	)
+	cfgs[1] = uapiCfg(args1...)
 	endpointCfgs[1] = uapiCfg(
 		"public_key", hex.EncodeToString(pub1[:]),
 		"endpoint", "127.0.0.1:%d",
@@ -185,9 +136,10 @@ func (pair *testPair) Send(
 		// pong is the new ping
 		p0, p1 = p1, p0
 	}
+
 	msg := tuntest.Ping(p0.ip, p1.ip)
 	p1.tun.Outbound <- msg
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(6 * time.Second)
 	defer timer.Stop()
 	var err error
 	select {
@@ -214,14 +166,12 @@ func (pair *testPair) Send(
 // genTestPair creates a testPair.
 func genTestPair(
 	tb testing.TB,
-	realSocket, withASecurity bool,
+	realSocket bool,
+	extraCfg ...string,
 ) (pair testPair) {
 	var cfg, endpointCfg [2]string
-	if withASecurity {
-		cfg, endpointCfg = genASecurityConfigs(tb)
-	} else {
-		cfg, endpointCfg = genConfigs(tb)
-	}
+	cfg, endpointCfg = genConfigs(tb, extraCfg...)
+
 	var binds [2]conn.Bind
 	if realSocket {
 		binds[0], binds[1] = conn.NewDefaultBind(), conn.NewDefaultBind()
@@ -265,7 +215,7 @@ func genTestPair(
 
 func TestTwoDevicePing(t *testing.T) {
 	goroutineLeakCheck(t)
-	pair := genTestPair(t, true, false)
+	pair := genTestPair(t, true)
 	t.Run("ping 1.0.0.1", func(t *testing.T) {
 		pair.Send(t, Ping, nil)
 	})
@@ -274,14 +224,73 @@ func TestTwoDevicePing(t *testing.T) {
 	})
 }
 
-func TestASecurityTwoDevicePing(t *testing.T) {
+// Run test with -race=false to avoid the race for setting the default msgTypes 2 times
+func TestAWGDevicePing(t *testing.T) {
 	goroutineLeakCheck(t)
-	pair := genTestPair(t, true, true)
+
+	pair := genTestPair(t, true,
+		"jc", "5",
+		"jmin", "500",
+		"jmax", "1000",
+		"s1", "30",
+		"s2", "40",
+		"s3", "50",
+		"s4", "5",
+		"h1", "123456",
+		"h2", "67543",
+		"h3", "123123",
+		"h4", "32345",
+	)
 	t.Run("ping 1.0.0.1", func(t *testing.T) {
 		pair.Send(t, Ping, nil)
 	})
 	t.Run("ping 1.0.0.2", func(t *testing.T) {
 		pair.Send(t, Pong, nil)
+	})
+}
+
+// Needs to be stopped with Ctrl-C
+func TestAWGHandshakeDevicePing(t *testing.T) {
+	t.Skip("This test is intended to be run manually, not as part of the test suite.")
+
+	signalContext, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	isRunning := atomic.NewBool(true)
+	go func() {
+		<-signalContext.Done()
+		fmt.Println("Waiting to finish")
+		isRunning.Store(false)
+	}()
+
+	goroutineLeakCheck(t)
+	pair := genTestPair(t, true,
+		"i1", "<b 0xf6ab3267fa><c><b 0xf6ab><t><r 10><wt 10>",
+		"i2", "<b 0xf6ab3267fa><r 100>",
+		"j1", "<b 0xffffffff><c><b 0xf6ab><t><r 10>",
+		"j2", "<c><b 0xf6ab><t><wt 1000>",
+		"j3", "<t><b 0xf6ab><c><r 10>",
+		"itime", "60",
+		// "jc", "1",
+		// "jmin", "500",
+		// "jmax", "1000",
+		// "s1", "30",
+		// "s2", "40",
+		// "h1", "123456",
+		// "h2", "67543",
+		// "h4", "32345",
+		// "h3", "123123",
+	)
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		for isRunning.Load() {
+			pair.Send(t, Ping, nil)
+			time.Sleep(2 * time.Second)
+		}
+	})
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		for isRunning.Load() {
+			pair.Send(t, Pong, nil)
+			time.Sleep(2 * time.Second)
+		}
 	})
 }
 
@@ -291,7 +300,7 @@ func TestUpDown(t *testing.T) {
 	const otrials = 10
 
 	for n := 0; n < otrials; n++ {
-		pair := genTestPair(t, false, false)
+		pair := genTestPair(t, false)
 		for i := range pair {
 			for k := range pair[i].dev.peers.keyMap {
 				pair[i].dev.IpcSet(fmt.Sprintf("public_key=%s\npersistent_keepalive_interval=1\n", hex.EncodeToString(k[:])))
@@ -325,7 +334,7 @@ func TestUpDown(t *testing.T) {
 // TestConcurrencySafety does other things concurrently with tunnel use.
 // It is intended to be used with the race detector to catch data races.
 func TestConcurrencySafety(t *testing.T) {
-	pair := genTestPair(t, true, false)
+	pair := genTestPair(t, true)
 	done := make(chan struct{})
 
 	const warmupIters = 10
@@ -406,7 +415,7 @@ func TestConcurrencySafety(t *testing.T) {
 }
 
 func BenchmarkLatency(b *testing.B) {
-	pair := genTestPair(b, true, false)
+	pair := genTestPair(b, true)
 
 	// Establish a connection.
 	pair.Send(b, Ping, nil)
@@ -420,7 +429,7 @@ func BenchmarkLatency(b *testing.B) {
 }
 
 func BenchmarkThroughput(b *testing.B) {
-	pair := genTestPair(b, true, false)
+	pair := genTestPair(b, true)
 
 	// Establish a connection.
 	pair.Send(b, Ping, nil)
@@ -464,7 +473,7 @@ func BenchmarkThroughput(b *testing.B) {
 }
 
 func BenchmarkUAPIGet(b *testing.B) {
-	pair := genTestPair(b, true, false)
+	pair := genTestPair(b, true)
 	pair.Send(b, Ping, nil)
 	pair.Send(b, Pong, nil)
 	b.ReportAllocs()

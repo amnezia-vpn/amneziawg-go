@@ -1,36 +1,27 @@
-package device
+package awg
 
 import (
 	"bytes"
 	"fmt"
 	"testing"
-
-	"github.com/amnezia-vpn/amneziawg-go/conn/bindtest"
-	"github.com/amnezia-vpn/amneziawg-go/tun/tuntest"
 )
 
 func setUpJunkCreator(t *testing.T) (junkCreator, error) {
-	cfg, _ := genASecurityConfigs(t)
-	tun := tuntest.NewChannelTUN()
-	binds := bindtest.NewChannelBinds()
-	level := LogLevelVerbose
-	dev := NewDevice(
-		tun.TUN(),
-		binds[0],
-		NewLogger(level, ""),
-	)
-
-	if err := dev.IpcSet(cfg[0]); err != nil {
-		t.Errorf("failed to configure device %v", err)
-		dev.Close()
-		return junkCreator{}, err
-	}
-
-	jc, err := NewJunkCreator(dev)
+	jc, err := NewJunkCreator(aSecCfgType{
+		IsSet:                      true,
+		JunkPacketCount:            5,
+		JunkPacketMinSize:          500,
+		JunkPacketMaxSize:          1000,
+		InitHeaderJunkSize:         30,
+		ResponseHeaderJunkSize:     40,
+		InitPacketMagicHeader:      123456,
+		ResponsePacketMagicHeader:  67543,
+		UnderloadPacketMagicHeader: 32345,
+		TransportPacketMagicHeader: 123123,
+	})
 
 	if err != nil {
 		t.Errorf("failed to create junk creator %v", err)
-		dev.Close()
 		return junkCreator{}, err
 	}
 
@@ -42,8 +33,9 @@ func Test_junkCreator_createJunkPackets(t *testing.T) {
 	if err != nil {
 		return
 	}
-	t.Run("", func(t *testing.T) {
-		got, err := jc.createJunkPackets()
+	t.Run("valid", func(t *testing.T) {
+		got := make([][]byte, 0, jc.aSecCfg.JunkPacketCount)
+		err := jc.CreateJunkPackets(&got)
 		if err != nil {
 			t.Errorf(
 				"junkCreator.createJunkPackets() = %v; failed",
@@ -68,7 +60,7 @@ func Test_junkCreator_createJunkPackets(t *testing.T) {
 }
 
 func Test_junkCreator_randomJunkWithSize(t *testing.T) {
-	t.Run("", func(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
 		jc, err := setUpJunkCreator(t)
 		if err != nil {
 			return
@@ -78,7 +70,6 @@ func Test_junkCreator_randomJunkWithSize(t *testing.T) {
 		fmt.Printf("%v\n%v\n", r1, r2)
 		if bytes.Equal(r1, r2) {
 			t.Errorf("same junks %v", err)
-			jc.device.Close()
 			return
 		}
 	})
@@ -90,14 +81,14 @@ func Test_junkCreator_randomPacketSize(t *testing.T) {
 		return
 	}
 	for range [30]struct{}{} {
-		t.Run("", func(t *testing.T) {
-			if got := jc.randomPacketSize(); jc.device.aSecCfg.junkPacketMinSize > got ||
-				got > jc.device.aSecCfg.junkPacketMaxSize {
+		t.Run("valid", func(t *testing.T) {
+			if got := jc.randomPacketSize(); jc.aSecCfg.JunkPacketMinSize > got ||
+				got > jc.aSecCfg.JunkPacketMaxSize {
 				t.Errorf(
 					"junkCreator.randomPacketSize() = %v, not between range [%v,%v]",
 					got,
-					jc.device.aSecCfg.junkPacketMinSize,
-					jc.device.aSecCfg.junkPacketMaxSize,
+					jc.aSecCfg.JunkPacketMinSize,
+					jc.aSecCfg.JunkPacketMaxSize,
 				)
 			}
 		})
@@ -109,13 +100,13 @@ func Test_junkCreator_appendJunk(t *testing.T) {
 	if err != nil {
 		return
 	}
-	t.Run("", func(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
 		s := "apple"
 		buffer := bytes.NewBuffer([]byte(s))
-		err := jc.appendJunk(buffer, 30)
+		err := jc.AppendJunk(buffer, 30)
 		if err != nil &&
 			buffer.Len() != len(s)+30 {
-			t.Errorf("appendWithJunk() size don't match")
+			t.Error("appendWithJunk() size don't match")
 		}
 		read := make([]byte, 50)
 		buffer.Read(read)

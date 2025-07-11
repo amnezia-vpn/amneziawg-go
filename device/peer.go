@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/device/awg"
 )
 
 type Peer struct {
@@ -111,6 +112,16 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	device.peers.keyMap[pk] = peer
 
 	return peer, nil
+}
+
+func (peer *Peer) SendAndCountBuffers(buffers [][]byte) error {
+	err := peer.SendBuffers(buffers)
+	if err == nil {
+		awg.PacketCounter.Add(uint64(len(buffers)))
+		return nil
+	}
+
+	return err
 }
 
 func (peer *Peer) SendBuffers(buffers [][]byte) error {
