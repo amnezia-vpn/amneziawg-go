@@ -1,6 +1,8 @@
 package awg
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type TagJunkPacketGenerators struct {
 	tagGenerators    []TagJunkPacketGenerator
@@ -20,7 +22,7 @@ func (generators *TagJunkPacketGenerators) IsDefined() bool {
 }
 
 // validate that packets were defined consecutively
-func (generators *TagJunkPacketGenerators) Validate() error {
+func (generators *TagJunkPacketGenerators) Validate(maxSegmentSize int) error {
 	seen := make([]bool, len(generators.tagGenerators))
 	for _, generator := range generators.tagGenerators {
 		index, err := generator.nameIndex()
@@ -31,6 +33,10 @@ func (generators *TagJunkPacketGenerators) Validate() error {
 			return fmt.Errorf("name index: %w", err)
 		} else {
 			seen[index-1] = true
+		}
+
+		if generator.Size() > maxSegmentSize {
+			return fmt.Errorf("junk packet %s must not exceed %d bytes", generator.name, maxSegmentSize)
 		}
 	}
 

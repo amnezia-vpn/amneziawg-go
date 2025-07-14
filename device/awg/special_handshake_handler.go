@@ -31,12 +31,12 @@ type SpecialHandshakeHandler struct {
 	IsSet bool
 }
 
-func (handler *SpecialHandshakeHandler) Validate() error {
+func (handler *SpecialHandshakeHandler) Validate(maxSegmentSize int) error {
 	var errs []error
-	if err := handler.SpecialJunk.Validate(); err != nil {
+	if err := handler.SpecialJunk.Validate(maxSegmentSize); err != nil {
 		errs = append(errs, err)
 	}
-	if err := handler.ControlledJunk.Validate(); err != nil {
+	if err := handler.ControlledJunk.Validate(maxSegmentSize); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

@@ -406,12 +406,12 @@ func (device *Device) handleDeviceLine(key, value string, tempAwg *awg.Protocol)
 			return nil
 		}
 
-		generators, err := awg.Parse(key, value)
+		generator, err := awg.Parse(key, value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "invalid %s: %w", key, err)
 		}
 		device.log.Verbosef("UAPI: Updating %s", key)
-		tempAwg.HandshakeHandler.SpecialJunk.AppendGenerator(generators)
+		tempAwg.HandshakeHandler.SpecialJunk.AppendGenerator(generator)
 		tempAwg.HandshakeHandler.IsSet = true
 	case "j1", "j2", "j3":
 		if len(value) == 0 {
@@ -419,13 +419,13 @@ func (device *Device) handleDeviceLine(key, value string, tempAwg *awg.Protocol)
 			return nil
 		}
 
-		generators, err := awg.Parse(key, value)
+		generator, err := awg.Parse(key, value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "invalid %s: %w", key, err)
 		}
 		device.log.Verbosef("UAPI: Updating %s", key)
 
-		tempAwg.HandshakeHandler.ControlledJunk.AppendGenerator(generators)
+		tempAwg.HandshakeHandler.ControlledJunk.AppendGenerator(generator)
 		tempAwg.HandshakeHandler.IsSet = true
 	case "itime":
 		if len(value) == 0 {

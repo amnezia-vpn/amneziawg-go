@@ -91,7 +91,7 @@ func TestTagJunkGeneratorHandlerValidate(t *testing.T) {
 				generators.AppendGenerator(gen)
 			}
 
-			err := generators.Validate()
+			err := generators.Validate(1500)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.errMsg)

@@ -819,7 +819,7 @@ func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
 	}
 
 	if tempAwg.HandshakeHandler.IsSet {
-		if err := tempAwg.HandshakeHandler.Validate(); err != nil {
+		if err := tempAwg.HandshakeHandler.Validate(MaxSegmentSize); err != nil {
 			errs = append(errs, ipcErrorf(
 				ipc.IpcErrorInvalid, "handshake handler validate: %w", err))
 		} else {

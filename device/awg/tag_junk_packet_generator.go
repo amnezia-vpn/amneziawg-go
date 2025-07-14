@@ -57,3 +57,7 @@ func (tg *TagJunkPacketGenerator) IpcGetFields() IpcFields {
 		Value: tg.tagValue,
 	}
 }
+
+func (tg *TagJunkPacketGenerator) Size() int {
+	return tg.packetSize
+}
