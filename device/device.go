@@ -6,7 +6,9 @@
 package device
 
 import (
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -578,6 +580,7 @@ func (device *Device) BindClose() error {
 	device.net.Unlock()
 	return err
 }
+
 func (device *Device) isAWG() bool {
 	return device.version >= VersionAwg
 }
@@ -591,171 +594,123 @@ func (device *Device) resetProtocol() {
 }
 
 func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
-	if !tempAwg.ASecCfg.IsSet && !tempAwg.HandshakeHandler.IsSet {
+	if !tempAwg.Cfg.IsSet && !tempAwg.HandshakeHandler.IsSet {
 		return nil
 	}
 
 	var errs []error
 
-	isASecOn := false
-	device.awg.ASecMux.Lock()
-	if tempAwg.ASecCfg.JunkPacketCount < 0 {
+	isAwgOn := false
+	device.awg.Mux.Lock()
+	if tempAwg.Cfg.JunkPacketCount < 0 {
 		errs = append(errs, ipcErrorf(
 			ipc.IpcErrorInvalid,
 			"JunkPacketCount should be non negative",
 		),
 		)
 	}
-	device.awg.ASecCfg.JunkPacketCount = tempAwg.ASecCfg.JunkPacketCount
-	if tempAwg.ASecCfg.JunkPacketCount != 0 {
-		isASecOn = true
+	device.awg.Cfg.JunkPacketCount = tempAwg.Cfg.JunkPacketCount
+	if tempAwg.Cfg.JunkPacketCount != 0 {
+		isAwgOn = true
 	}
 
-	device.awg.ASecCfg.JunkPacketMinSize = tempAwg.ASecCfg.JunkPacketMinSize
-	if tempAwg.ASecCfg.JunkPacketMinSize != 0 {
-		isASecOn = true
+	device.awg.Cfg.JunkPacketMinSize = tempAwg.Cfg.JunkPacketMinSize
+	if tempAwg.Cfg.JunkPacketMinSize != 0 {
+		isAwgOn = true
 	}
 
-	if device.awg.ASecCfg.JunkPacketCount > 0 &&
-		tempAwg.ASecCfg.JunkPacketMaxSize == tempAwg.ASecCfg.JunkPacketMinSize {
+	if device.awg.Cfg.JunkPacketCount > 0 &&
+		tempAwg.Cfg.JunkPacketMaxSize == tempAwg.Cfg.JunkPacketMinSize {
 
-		tempAwg.ASecCfg.JunkPacketMaxSize++ // to make rand gen work
+		tempAwg.Cfg.JunkPacketMaxSize++ // to make rand gen work
 	}
 
-	if tempAwg.ASecCfg.JunkPacketMaxSize >= MaxSegmentSize {
-		device.awg.ASecCfg.JunkPacketMinSize = 0
-		device.awg.ASecCfg.JunkPacketMaxSize = 1
+	if tempAwg.Cfg.JunkPacketMaxSize >= MaxSegmentSize {
+		device.awg.Cfg.JunkPacketMinSize = 0
+		device.awg.Cfg.JunkPacketMaxSize = 1
 		errs = append(errs, ipcErrorf(
 			ipc.IpcErrorInvalid,
 			"JunkPacketMaxSize: %d; should be smaller than maxSegmentSize: %d",
-			tempAwg.ASecCfg.JunkPacketMaxSize,
+			tempAwg.Cfg.JunkPacketMaxSize,
 			MaxSegmentSize,
 		))
-	} else if tempAwg.ASecCfg.JunkPacketMaxSize < tempAwg.ASecCfg.JunkPacketMinSize {
+	} else if tempAwg.Cfg.JunkPacketMaxSize < tempAwg.Cfg.JunkPacketMinSize {
 		errs = append(errs, ipcErrorf(
 			ipc.IpcErrorInvalid,
 			"maxSize: %d; should be greater than minSize: %d",
-			tempAwg.ASecCfg.JunkPacketMaxSize,
-			tempAwg.ASecCfg.JunkPacketMinSize,
+			tempAwg.Cfg.JunkPacketMaxSize,
+			tempAwg.Cfg.JunkPacketMinSize,
 		))
 	} else {
-		device.awg.ASecCfg.JunkPacketMaxSize = tempAwg.ASecCfg.JunkPacketMaxSize
+		device.awg.Cfg.JunkPacketMaxSize = tempAwg.Cfg.JunkPacketMaxSize
 	}
 
-	if tempAwg.ASecCfg.JunkPacketMaxSize != 0 {
-		isASecOn = true
+	if tempAwg.Cfg.JunkPacketMaxSize != 0 {
+		isAwgOn = true
 	}
 
-	newInitSize := MessageInitiationSize + tempAwg.ASecCfg.InitHeaderJunkSize
+	magicHeaders := make([]awg.MagicHeader, 4)
 
-	if newInitSize >= MaxSegmentSize {
-		errs = append(errs, ipcErrorf(
+	if len(tempAwg.Cfg.MagicHeaders.Values) != 4 {
+		return ipcErrorf(
 			ipc.IpcErrorInvalid,
-			`init header size(148) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
-			tempAwg.ASecCfg.InitHeaderJunkSize,
-			MaxSegmentSize,
-		),
+			"magic headers should have 4 values; got: %d",
+			len(tempAwg.Cfg.MagicHeaders.Values),
 		)
-	} else {
-		device.awg.ASecCfg.InitHeaderJunkSize = tempAwg.ASecCfg.InitHeaderJunkSize
 	}
 
-	if tempAwg.ASecCfg.InitHeaderJunkSize != 0 {
-		isASecOn = true
-	}
-
-	newResponseSize := MessageResponseSize + tempAwg.ASecCfg.ResponseHeaderJunkSize
-
-	if newResponseSize >= MaxSegmentSize {
-		errs = append(errs, ipcErrorf(
-			ipc.IpcErrorInvalid,
-			`response header size(92) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
-			tempAwg.ASecCfg.ResponseHeaderJunkSize,
-			MaxSegmentSize,
-		),
-		)
-	} else {
-		device.awg.ASecCfg.ResponseHeaderJunkSize = tempAwg.ASecCfg.ResponseHeaderJunkSize
-	}
-
-	if tempAwg.ASecCfg.ResponseHeaderJunkSize != 0 {
-		isASecOn = true
-	}
-
-	newCookieSize := MessageCookieReplySize + tempAwg.ASecCfg.CookieReplyHeaderJunkSize
-
-	if newCookieSize >= MaxSegmentSize {
-		errs = append(errs, ipcErrorf(
-			ipc.IpcErrorInvalid,
-			`cookie reply size(92) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
-			tempAwg.ASecCfg.CookieReplyHeaderJunkSize,
-			MaxSegmentSize,
-		),
-		)
-	} else {
-		device.awg.ASecCfg.CookieReplyHeaderJunkSize = tempAwg.ASecCfg.CookieReplyHeaderJunkSize
-	}
-
-	if tempAwg.ASecCfg.CookieReplyHeaderJunkSize != 0 {
-		isASecOn = true
-	}
-
-	newTransportSize := MessageTransportSize + tempAwg.ASecCfg.TransportHeaderJunkSize
-
-	if newTransportSize >= MaxSegmentSize {
-		errs = append(errs, ipcErrorf(
-			ipc.IpcErrorInvalid,
-			`transport size(92) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
-			tempAwg.ASecCfg.TransportHeaderJunkSize,
-			MaxSegmentSize,
-		),
-		)
-	} else {
-		device.awg.ASecCfg.TransportHeaderJunkSize = tempAwg.ASecCfg.TransportHeaderJunkSize
-	}
-
-	if tempAwg.ASecCfg.TransportHeaderJunkSize != 0 {
-		isASecOn = true
-	}
-
-	if tempAwg.ASecCfg.InitPacketMagicHeader > 4 {
-		isASecOn = true
+	if tempAwg.Cfg.MagicHeaders.Values[0].Min > 4 {
+		isAwgOn = true
 		device.log.Verbosef("UAPI: Updating init_packet_magic_header")
-		device.awg.ASecCfg.InitPacketMagicHeader = tempAwg.ASecCfg.InitPacketMagicHeader
-		MessageInitiationType = device.awg.ASecCfg.InitPacketMagicHeader
+		magicHeaders[0] = tempAwg.Cfg.MagicHeaders.Values[0]
+
+		MessageInitiationType = magicHeaders[0].Min
 	} else {
 		device.log.Verbosef("UAPI: Using default init type")
 		MessageInitiationType = DefaultMessageInitiationType
+		magicHeaders[0] = awg.NewMagicHeaderSameValue(DefaultMessageInitiationType)
 	}
 
-	if tempAwg.ASecCfg.ResponsePacketMagicHeader > 4 {
-		isASecOn = true
+	if tempAwg.Cfg.MagicHeaders.Values[1].Min > 4 {
+		isAwgOn = true
+
 		device.log.Verbosef("UAPI: Updating response_packet_magic_header")
-		device.awg.ASecCfg.ResponsePacketMagicHeader = tempAwg.ASecCfg.ResponsePacketMagicHeader
-		MessageResponseType = device.awg.ASecCfg.ResponsePacketMagicHeader
+		magicHeaders[1] = tempAwg.Cfg.MagicHeaders.Values[1]
+		MessageResponseType = magicHeaders[1].Min
 	} else {
 		device.log.Verbosef("UAPI: Using default response type")
 		MessageResponseType = DefaultMessageResponseType
+		magicHeaders[1] = awg.NewMagicHeaderSameValue(DefaultMessageResponseType)
 	}
 
-	if tempAwg.ASecCfg.UnderloadPacketMagicHeader > 4 {
-		isASecOn = true
+	if tempAwg.Cfg.MagicHeaders.Values[2].Min > 4 {
+		isAwgOn = true
+
 		device.log.Verbosef("UAPI: Updating underload_packet_magic_header")
-		device.awg.ASecCfg.UnderloadPacketMagicHeader = tempAwg.ASecCfg.UnderloadPacketMagicHeader
-		MessageCookieReplyType = device.awg.ASecCfg.UnderloadPacketMagicHeader
+		magicHeaders[2] = tempAwg.Cfg.MagicHeaders.Values[2]
+		MessageCookieReplyType = magicHeaders[2].Min
 	} else {
 		device.log.Verbosef("UAPI: Using default underload type")
 		MessageCookieReplyType = DefaultMessageCookieReplyType
+		magicHeaders[2] = awg.NewMagicHeaderSameValue(DefaultMessageCookieReplyType)
 	}
 
-	if tempAwg.ASecCfg.TransportPacketMagicHeader > 4 {
-		isASecOn = true
+	if tempAwg.Cfg.MagicHeaders.Values[3].Min > 4 {
+		isAwgOn = true
+
 		device.log.Verbosef("UAPI: Updating transport_packet_magic_header")
-		device.awg.ASecCfg.TransportPacketMagicHeader = tempAwg.ASecCfg.TransportPacketMagicHeader
-		MessageTransportType = device.awg.ASecCfg.TransportPacketMagicHeader
+		magicHeaders[3] = tempAwg.Cfg.MagicHeaders.Values[3]
+		MessageTransportType = magicHeaders[3].Min
 	} else {
 		device.log.Verbosef("UAPI: Using default transport type")
 		MessageTransportType = DefaultMessageTransportType
+		magicHeaders[3] = awg.NewMagicHeaderSameValue(DefaultMessageTransportType)
+	}
+
+	var err error
+	device.awg.Cfg.MagicHeaders, err = awg.NewMagicHeaders(magicHeaders)
+	if err != nil {
+		errs = append(errs, ipcErrorf(ipc.IpcErrorInvalid, "new magic headers: %w", err))
 	}
 
 	isSameHeaderMap := map[uint32]struct{}{
@@ -778,6 +733,78 @@ func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
 		)
 	}
 
+	newInitSize := MessageInitiationSize + tempAwg.Cfg.InitHeaderJunkSize
+
+	if newInitSize >= MaxSegmentSize {
+		errs = append(errs, ipcErrorf(
+			ipc.IpcErrorInvalid,
+			`init header size(148) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
+			tempAwg.Cfg.InitHeaderJunkSize,
+			MaxSegmentSize,
+		),
+		)
+	} else {
+		device.awg.Cfg.InitHeaderJunkSize = tempAwg.Cfg.InitHeaderJunkSize
+	}
+
+	if tempAwg.Cfg.InitHeaderJunkSize != 0 {
+		isAwgOn = true
+	}
+
+	newResponseSize := MessageResponseSize + tempAwg.Cfg.ResponseHeaderJunkSize
+
+	if newResponseSize >= MaxSegmentSize {
+		errs = append(errs, ipcErrorf(
+			ipc.IpcErrorInvalid,
+			`response header size(92) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
+			tempAwg.Cfg.ResponseHeaderJunkSize,
+			MaxSegmentSize,
+		),
+		)
+	} else {
+		device.awg.Cfg.ResponseHeaderJunkSize = tempAwg.Cfg.ResponseHeaderJunkSize
+	}
+
+	if tempAwg.Cfg.ResponseHeaderJunkSize != 0 {
+		isAwgOn = true
+	}
+
+	newCookieSize := MessageCookieReplySize + tempAwg.Cfg.CookieReplyHeaderJunkSize
+
+	if newCookieSize >= MaxSegmentSize {
+		errs = append(errs, ipcErrorf(
+			ipc.IpcErrorInvalid,
+			`cookie reply size(92) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
+			tempAwg.Cfg.CookieReplyHeaderJunkSize,
+			MaxSegmentSize,
+		),
+		)
+	} else {
+		device.awg.Cfg.CookieReplyHeaderJunkSize = tempAwg.Cfg.CookieReplyHeaderJunkSize
+	}
+
+	if tempAwg.Cfg.CookieReplyHeaderJunkSize != 0 {
+		isAwgOn = true
+	}
+
+	newTransportSize := MessageTransportSize + tempAwg.Cfg.TransportHeaderJunkSize
+
+	if newTransportSize >= MaxSegmentSize {
+		errs = append(errs, ipcErrorf(
+			ipc.IpcErrorInvalid,
+			`transport size(92) + junkSize:%d; should be smaller than maxSegmentSize: %d`,
+			tempAwg.Cfg.TransportHeaderJunkSize,
+			MaxSegmentSize,
+		),
+		)
+	} else {
+		device.awg.Cfg.TransportHeaderJunkSize = tempAwg.Cfg.TransportHeaderJunkSize
+	}
+
+	if tempAwg.Cfg.TransportHeaderJunkSize != 0 {
+		isAwgOn = true
+	}
+
 	isSameSizeMap := map[int]struct{}{
 		newInitSize:      {},
 		newResponseSize:  {},
@@ -797,10 +824,10 @@ func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
 		)
 	} else {
 		msgTypeToJunkSize = map[uint32]int{
-			MessageInitiationType:  device.awg.ASecCfg.InitHeaderJunkSize,
-			MessageResponseType:    device.awg.ASecCfg.ResponseHeaderJunkSize,
-			MessageCookieReplyType: device.awg.ASecCfg.CookieReplyHeaderJunkSize,
-			MessageTransportType:   device.awg.ASecCfg.TransportHeaderJunkSize,
+			MessageInitiationType:  device.awg.Cfg.InitHeaderJunkSize,
+			MessageResponseType:    device.awg.Cfg.ResponseHeaderJunkSize,
+			MessageCookieReplyType: device.awg.Cfg.CookieReplyHeaderJunkSize,
+			MessageTransportType:   device.awg.Cfg.TransportHeaderJunkSize,
 		}
 
 		packetSizeToMsgType = map[int]uint32{
@@ -811,12 +838,8 @@ func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
 		}
 	}
 
-	device.awg.IsASecOn.SetTo(isASecOn)
-	var err error
-	device.awg.JunkCreator, err = awg.NewJunkCreator(device.awg.ASecCfg)
-	if err != nil {
-		errs = append(errs, err)
-	}
+	device.awg.IsOn.SetTo(isAwgOn)
+	device.awg.JunkCreator = awg.NewJunkCreator(device.awg.Cfg)
 
 	if tempAwg.HandshakeHandler.IsSet {
 		if err := tempAwg.HandshakeHandler.Validate(); err != nil {
@@ -824,15 +847,92 @@ func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
 				ipc.IpcErrorInvalid, "handshake handler validate: %w", err))
 		} else {
 			device.awg.HandshakeHandler = tempAwg.HandshakeHandler
-			device.awg.HandshakeHandler.ControlledJunk.DefaultJunkCount = tempAwg.ASecCfg.JunkPacketCount
-			device.awg.HandshakeHandler.SpecialJunk.DefaultJunkCount = tempAwg.ASecCfg.JunkPacketCount
+			device.awg.HandshakeHandler.ControlledJunk.DefaultJunkCount = tempAwg.Cfg.JunkPacketCount
+			device.awg.HandshakeHandler.SpecialJunk.DefaultJunkCount = tempAwg.Cfg.JunkPacketCount
 			device.version = VersionAwgSpecialHandshake
 		}
 	} else {
 		device.version = VersionAwg
 	}
 
-	device.awg.ASecMux.Unlock()
+	device.awg.Mux.Unlock()
 
 	return errors.Join(errs...)
+}
+
+func (device *Device) ProcessAWGPacket(size int, packet *[]byte, buffer *[MaxMessageSize]byte) (uint32, error) {
+	// TODO:
+	// if awg.WaitResponse.ShouldWait.IsSet() {
+	// 	awg.WaitResponse.Channel <- struct{}{}
+	// }
+
+	expectedMsgType, isKnownSize := packetSizeToMsgType[size]
+	if !isKnownSize {
+		msgType, err := device.handleTransport(size, packet, buffer)
+
+		if err != nil {
+			return 0, fmt.Errorf("handle transport: %w", err)
+		}
+
+		return msgType, nil
+	}
+
+	junkSize := msgTypeToJunkSize[expectedMsgType]
+
+	// transport size can align with other header types;
+	// making sure we have the right actualMsgType
+	actualMsgType, err := device.getMsgType(packet, junkSize)
+	if err != nil {
+		return 0, fmt.Errorf("get msg type: %w", err)
+	}
+
+	if actualMsgType == expectedMsgType {
+		*packet = (*packet)[junkSize:]
+		return actualMsgType, nil
+	}
+
+	device.log.Verbosef("awg: transport packet lined up with another msg type")
+
+	msgType, err := device.handleTransport(size, packet, buffer)
+	if err != nil {
+		return 0, fmt.Errorf("handle transport: %w", err)
+	}
+
+	return msgType, nil
+}
+
+func (device *Device) getMsgType(packet *[]byte, junkSize int) (uint32, error) {
+	msgTypeValue := binary.LittleEndian.Uint32((*packet)[junkSize : junkSize+4])
+	msgType, err := device.awg.GetMagicHeaderMinFor(msgTypeValue)
+
+	if err != nil {
+		return 0, fmt.Errorf("get magic header min: %w", err)
+	}
+
+	return msgType, nil
+}
+
+func (device *Device) handleTransport(size int, packet *[]byte, buffer *[MaxMessageSize]byte) (uint32, error) {
+	junkSize := device.awg.Cfg.TransportHeaderJunkSize
+
+	msgType, err := device.getMsgType(packet, junkSize)
+	if err != nil {
+		return 0, fmt.Errorf("get msg type: %w", err)
+	}
+
+	if msgType != MessageTransportType {
+		// probably a junk packet
+		return 0, fmt.Errorf("Received message with unknown type: %d", msgType)
+	}
+
+	if junkSize > 0 {
+		// remove junk from buffer by shifting the packet
+		// this buffer is also used for decryption, so it needs to be corrected
+		copy((*buffer)[:size], (*packet)[junkSize:])
+		size -= junkSize
+		// need to reinitialize packet as well
+		(*packet) = (*packet)[:size]
+	}
+
+	return msgType, nil
 }

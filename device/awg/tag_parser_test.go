@@ -64,7 +64,7 @@ func TestParse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse(tt.args.name, tt.args.input)
+			_, err := ParseTagJunkGenerator(tt.args.name, tt.args.input)
 
 			// TODO:  ErrorAs doesn't work as you think
 			if tt.wantErr != nil {

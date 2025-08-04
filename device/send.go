@@ -130,7 +130,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	if peer.device.version >= VersionAwg {
 		var junks [][]byte
 		if peer.device.version == VersionAwgSpecialHandshake {
-			peer.device.awg.ASecMux.RLock()
+			peer.device.awg.Mux.RLock()
 			// set junks depending on packet type
 			junks = peer.device.awg.HandshakeHandler.GenerateSpecialJunk()
 			if junks == nil {
@@ -141,18 +141,13 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 			} else {
 				peer.device.log.Verbosef("%v - Special junks sent", peer)
 			}
-			peer.device.awg.ASecMux.RUnlock()
+			peer.device.awg.Mux.RUnlock()
 		} else {
-			junks = make([][]byte, 0, peer.device.awg.ASecCfg.JunkPacketCount)
+			junks = make([][]byte, 0, peer.device.awg.Cfg.JunkPacketCount)
 		}
-		peer.device.awg.ASecMux.RLock()
-		err := peer.device.awg.JunkCreator.CreateJunkPackets(&junks)
-		peer.device.awg.ASecMux.RUnlock()
-
-		if err != nil {
-			peer.device.log.Errorf("%v - %v", peer, err)
-			return err
-		}
+		peer.device.awg.Mux.RLock()
+		peer.device.awg.JunkCreator.CreateJunkPackets(&junks)
+		peer.device.awg.Mux.RUnlock()
 
 		if len(junks) > 0 {
 			err = peer.SendBuffers(junks)
@@ -242,10 +237,24 @@ func (device *Device) SendHandshakeCookie(
 	device.log.Verbosef("Sending cookie response for denied handshake message for %v", initiatingElem.endpoint.DstToString())
 
 	sender := binary.LittleEndian.Uint32(initiatingElem.packet[4:8])
+	msgType := DefaultMessageCookieReplyType
+	if device.isAWG() {
+		device.awg.Mux.RLock()
+
+		var err error
+		msgType, err = device.awg.GetMsgType(DefaultMessageCookieReplyType)
+		device.awg.Mux.RUnlock()
+		if err != nil {
+			device.log.Errorf("Get message type for cookie reply: %v", err)
+			return err
+		}
+	}
+
 	reply, err := device.cookieChecker.CreateReply(
 		initiatingElem.packet,
 		sender,
 		initiatingElem.endpoint.DstToBytes(),
+		msgType,
 	)
 	if err != nil {
 		device.log.Errorf("Failed to create cookie reply: %v", err)
@@ -528,7 +537,20 @@ func (device *Device) RoutineEncryption(id int) {
 			fieldReceiver := header[4:8]
 			fieldNonce := header[8:16]
 
-			binary.LittleEndian.PutUint32(fieldType, MessageTransportType)
+			msgType := DefaultMessageTransportType
+			if device.isAWG() {
+				device.awg.Mux.RLock()
+
+				var err error
+				msgType, err = device.awg.GetMsgType(DefaultMessageTransportType)
+				device.awg.Mux.RUnlock()
+				if err != nil {
+					device.log.Errorf("get message type for transport: %v", err)
+					continue
+				}
+			}
+
+			binary.LittleEndian.PutUint32(fieldType, msgType)
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 

@@ -6,43 +6,34 @@ import (
 	"testing"
 )
 
-func setUpJunkCreator(t *testing.T) (junkCreator, error) {
-	jc, err := NewJunkCreator(aSecCfgType{
-		IsSet:                      true,
-		JunkPacketCount:            5,
-		JunkPacketMinSize:          500,
-		JunkPacketMaxSize:          1000,
-		InitHeaderJunkSize:         30,
-		ResponseHeaderJunkSize:     40,
-		InitPacketMagicHeader:      123456,
-		ResponsePacketMagicHeader:  67543,
-		UnderloadPacketMagicHeader: 32345,
-		TransportPacketMagicHeader: 123123,
+func setUpJunkCreator() JunkCreator {
+	mh, _ := NewMagicHeaders(
+		[]MagicHeader{
+			NewMagicHeaderSameValue(123456),
+			NewMagicHeaderSameValue(67543),
+			NewMagicHeaderSameValue(32345),
+			NewMagicHeaderSameValue(123123),
+		},
+	)
+
+	jc := NewJunkCreator(Cfg{
+		IsSet:                  true,
+		JunkPacketCount:        5,
+		JunkPacketMinSize:      500,
+		JunkPacketMaxSize:      1000,
+		InitHeaderJunkSize:     30,
+		ResponseHeaderJunkSize: 40,
+		MagicHeaders:           mh,
 	})
 
-	if err != nil {
-		t.Errorf("failed to create junk creator %v", err)
-		return junkCreator{}, err
-	}
-
-	return jc, nil
+	return jc
 }
 
 func Test_junkCreator_createJunkPackets(t *testing.T) {
-	jc, err := setUpJunkCreator(t)
-	if err != nil {
-		return
-	}
+	jc := setUpJunkCreator()
 	t.Run("valid", func(t *testing.T) {
-		got := make([][]byte, 0, jc.aSecCfg.JunkPacketCount)
-		err := jc.CreateJunkPackets(&got)
-		if err != nil {
-			t.Errorf(
-				"junkCreator.createJunkPackets() = %v; failed",
-				err,
-			)
-			return
-		}
+		got := make([][]byte, 0, jc.cfg.JunkPacketCount)
+		jc.CreateJunkPackets(&got)
 		seen := make(map[string]bool)
 		for _, junk := range got {
 			key := string(junk)
@@ -61,34 +52,28 @@ func Test_junkCreator_createJunkPackets(t *testing.T) {
 
 func Test_junkCreator_randomJunkWithSize(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
-		jc, err := setUpJunkCreator(t)
-		if err != nil {
-			return
-		}
-		r1, _ := jc.randomJunkWithSize(10)
-		r2, _ := jc.randomJunkWithSize(10)
+		jc := setUpJunkCreator()
+		r1 := jc.randomJunkWithSize(10)
+		r2 := jc.randomJunkWithSize(10)
 		fmt.Printf("%v\n%v\n", r1, r2)
 		if bytes.Equal(r1, r2) {
-			t.Errorf("same junks %v", err)
+			t.Errorf("same junks")
 			return
 		}
 	})
 }
 
 func Test_junkCreator_randomPacketSize(t *testing.T) {
-	jc, err := setUpJunkCreator(t)
-	if err != nil {
-		return
-	}
+	jc := setUpJunkCreator()
 	for range [30]struct{}{} {
 		t.Run("valid", func(t *testing.T) {
-			if got := jc.randomPacketSize(); jc.aSecCfg.JunkPacketMinSize > got ||
-				got > jc.aSecCfg.JunkPacketMaxSize {
+			if got := jc.randomPacketSize(); jc.cfg.JunkPacketMinSize > got ||
+				got > jc.cfg.JunkPacketMaxSize {
 				t.Errorf(
 					"junkCreator.randomPacketSize() = %v, not between range [%v,%v]",
 					got,
-					jc.aSecCfg.JunkPacketMinSize,
-					jc.aSecCfg.JunkPacketMaxSize,
+					jc.cfg.JunkPacketMinSize,
+					jc.cfg.JunkPacketMaxSize,
 				)
 			}
 		})
@@ -96,10 +81,7 @@ func Test_junkCreator_randomPacketSize(t *testing.T) {
 }
 
 func Test_junkCreator_appendJunk(t *testing.T) {
-	jc, err := setUpJunkCreator(t)
-	if err != nil {
-		return
-	}
+	jc := setUpJunkCreator()
 	t.Run("valid", func(t *testing.T) {
 		s := "apple"
 		buffer := bytes.NewBuffer([]byte(s))

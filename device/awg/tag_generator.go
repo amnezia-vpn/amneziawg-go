@@ -59,41 +59,108 @@ func hexToBytes(hexStr string) ([]byte, error) {
 	return hex.DecodeString(hexStr)
 }
 
-type RandomPacketGenerator struct {
+type randomGeneratorBase struct {
 	cha8Rand *v2.ChaCha8
 	size     int
 }
 
-func (rpg *RandomPacketGenerator) Generate() []byte {
-	junk := make([]byte, rpg.size)
-	rpg.cha8Rand.Read(junk)
-	return junk
-}
-
-func (rpg *RandomPacketGenerator) Size() int {
-	return rpg.size
-}
-
-func newRandomPacketGenerator(param string) (Generator, error) {
+func newRandomGeneratorBase(param string) (*randomGeneratorBase, error) {
 	size, err := strconv.Atoi(param)
 	if err != nil {
-		return nil, fmt.Errorf("random packet parse int: %w", err)
+		return nil, fmt.Errorf("parse int: %w", err)
 	}
 
 	if size > 1000 {
-		return nil, fmt.Errorf("random packet size must be less than 1000")
+		return nil, fmt.Errorf("size must be less than 1000")
 	}
 
 	buf := make([]byte, 32)
 	_, err = crand.Read(buf)
 	if err != nil {
-		return nil, fmt.Errorf("random packet crand read: %w", err)
+		return nil, fmt.Errorf("crand read: %w", err)
 	}
 
-	return &RandomPacketGenerator{
+	return &randomGeneratorBase{
 		cha8Rand: v2.NewChaCha8([32]byte(buf)),
 		size:     size,
 	}, nil
+}
+
+func (rpg *randomGeneratorBase) generate() []byte {
+	junk := make([]byte, rpg.size)
+	rpg.cha8Rand.Read(junk)
+	return junk
+}
+
+func (rpg *randomGeneratorBase) Size() int {
+	return rpg.size
+}
+
+type RandomBytesGenerator struct {
+	*randomGeneratorBase
+}
+
+func newRandomBytesGenerator(param string) (Generator, error) {
+	rpgBase, err := newRandomGeneratorBase(param)
+	if err != nil {
+		return nil, fmt.Errorf("new random bytes generator: %w", err)
+	}
+
+	return &RandomBytesGenerator{randomGeneratorBase: rpgBase}, nil
+}
+
+func (rpg *RandomBytesGenerator) Generate() []byte {
+	return rpg.generate()
+}
+
+const alphanumericChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+type RandomASCIIGenerator struct {
+	*randomGeneratorBase
+}
+
+func newRandomASCIIGenerator(param string) (Generator, error) {
+	rpgBase, err := newRandomGeneratorBase(param)
+	if err != nil {
+		return nil, fmt.Errorf("new random ascii generator: %w", err)
+	}
+
+	return &RandomASCIIGenerator{randomGeneratorBase: rpgBase}, nil
+}
+
+func (rpg *RandomASCIIGenerator) Generate() []byte {
+	junk := rpg.generate()
+
+	result := make([]byte, rpg.size)
+	for i, b := range junk {
+		result[i] = alphanumericChars[b%byte(len(alphanumericChars))]
+	}
+
+	return result
+}
+
+type RandomDigitGenerator struct {
+	*randomGeneratorBase
+}
+
+func newRandomDigitGenerator(param string) (Generator, error) {
+	rpgBase, err := newRandomGeneratorBase(param)
+	if err != nil {
+		return nil, fmt.Errorf("new random digit generator: %w", err)
+	}
+
+	return &RandomDigitGenerator{randomGeneratorBase: rpgBase}, nil
+}
+
+func (rpg *RandomDigitGenerator) Generate() []byte {
+	junk := rpg.generate()
+
+	result := make([]byte, rpg.size)
+	for i, b := range junk {
+		result[i] = '0' + (b % 10) // Convert to digit character
+	}
+
+	return result
 }
 
 type TimestampGenerator struct {

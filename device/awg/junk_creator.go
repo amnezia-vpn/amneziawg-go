@@ -2,69 +2,49 @@ package awg
 
 import (
 	"bytes"
-	crand "crypto/rand"
 	"fmt"
-	v2 "math/rand/v2"
 )
 
-type junkCreator struct {
-	aSecCfg  aSecCfgType
-	cha8Rand *v2.ChaCha8
+type JunkCreator struct {
+	cfg             Cfg
+	randomGenerator PRNG[int]
 }
 
 // TODO: refactor param to only pass the junk related params
-func NewJunkCreator(aSecCfg aSecCfgType) (junkCreator, error) {
-	buf := make([]byte, 32)
-	_, err := crand.Read(buf)
-	if err != nil {
-		return junkCreator{}, err
-	}
-	return junkCreator{aSecCfg: aSecCfg, cha8Rand: v2.NewChaCha8([32]byte(buf))}, nil
+func NewJunkCreator(cfg Cfg) JunkCreator {
+	return JunkCreator{cfg: cfg, randomGenerator: NewPRNG[int]()}
 }
 
-// Should be called with aSecMux RLocked
-func (jc *junkCreator) CreateJunkPackets(junks *[][]byte) error {
-	if jc.aSecCfg.JunkPacketCount == 0 {
-		return nil
+// Should be called with awg mux RLocked
+func (jc *JunkCreator) CreateJunkPackets(junks *[][]byte) {
+	if jc.cfg.JunkPacketCount == 0 {
+		return
 	}
 
-	for range jc.aSecCfg.JunkPacketCount {
+	for range jc.cfg.JunkPacketCount {
 		packetSize := jc.randomPacketSize()
-		junk, err := jc.randomJunkWithSize(packetSize)
-		if err != nil {
-			return fmt.Errorf("create junk packet: %v", err)
-		}
+		junk := jc.randomJunkWithSize(packetSize)
 		*junks = append(*junks, junk)
 	}
-	return nil
+	return
 }
 
-// Should be called with aSecMux RLocked
-func (jc *junkCreator) randomPacketSize() int {
-	return int(
-		jc.cha8Rand.Uint64()%uint64(
-			jc.aSecCfg.JunkPacketMaxSize-jc.aSecCfg.JunkPacketMinSize,
-		),
-	) + jc.aSecCfg.JunkPacketMinSize
+// Should be called with awg mux RLocked
+func (jc *JunkCreator) randomPacketSize() int {
+	return jc.randomGenerator.RandomSizeInRange(jc.cfg.JunkPacketMinSize, jc.cfg.JunkPacketMaxSize)
 }
 
-// Should be called with aSecMux RLocked
-func (jc *junkCreator) AppendJunk(writer *bytes.Buffer, size int) error {
-	headerJunk, err := jc.randomJunkWithSize(size)
-	if err != nil {
-		return fmt.Errorf("create header junk: %v", err)
-	}
-	_, err = writer.Write(headerJunk)
+// Should be called with awg mux RLocked
+func (jc *JunkCreator) AppendJunk(writer *bytes.Buffer, size int) error {
+	headerJunk := jc.randomJunkWithSize(size)
+	_, err := writer.Write(headerJunk)
 	if err != nil {
 		return fmt.Errorf("write header junk: %v", err)
 	}
 	return nil
 }
 
-// Should be called with aSecMux RLocked
-func (jc *junkCreator) randomJunkWithSize(size int) ([]byte, error) {
-	// TODO: use a memory pool to allocate
-	junk := make([]byte, size)
-	_, err := jc.cha8Rand.Read(junk)
-	return junk, err
+// Should be called with awg mux RLocked
+func (jc *JunkCreator) randomJunkWithSize(size int) []byte {
+	return jc.randomGenerator.ReadSize(size)
 }

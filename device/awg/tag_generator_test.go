@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_newBytesGenerator(t *testing.T) {
+func TestNewBytesGenerator(t *testing.T) {
+	t.Parallel()
+
 	type args struct {
 		param string
 	}
@@ -63,6 +65,8 @@ func Test_newBytesGenerator(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got, err := newBytesGenerator(tt.args.param)
 
 			if tt.wantErr != nil {
@@ -80,7 +84,9 @@ func Test_newBytesGenerator(t *testing.T) {
 	}
 }
 
-func Test_newRandomPacketGenerator(t *testing.T) {
+func TestNewRandomBytesGenerator(t *testing.T) {
+	t.Parallel()
+
 	type args struct {
 		param string
 	}
@@ -117,9 +123,134 @@ func Test_newRandomPacketGenerator(t *testing.T) {
 			},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := newRandomPacketGenerator(tt.args.param)
+			t.Parallel()
+
+			got, err := newRandomBytesGenerator(tt.args.param)
+			if tt.wantErr != nil {
+				require.ErrorAs(t, err, &tt.wantErr)
+				require.Nil(t, got)
+				return
+			}
+
+			require.Nil(t, err)
+			require.NotNil(t, got)
+			first := got.Generate()
+
+			second := got.Generate()
+			require.NotEqual(t, first, second)
+		})
+	}
+}
+
+func TestNewRandomASCIIGenerator(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		param string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr error
+	}{
+		{
+			name: "empty",
+			args: args{
+				param: "",
+			},
+			wantErr: fmt.Errorf("parse int"),
+		},
+		{
+			name: "not an int",
+			args: args{
+				param: "x",
+			},
+			wantErr: fmt.Errorf("parse int"),
+		},
+		{
+			name: "too large",
+			args: args{
+				param: "1001",
+			},
+			wantErr: fmt.Errorf("random packet size must be less than 1000"),
+		},
+		{
+			name: "valid",
+			args: args{
+				param: "12",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := newRandomASCIIGenerator(tt.args.param)
+			if tt.wantErr != nil {
+				require.ErrorAs(t, err, &tt.wantErr)
+				require.Nil(t, got)
+				return
+			}
+
+			require.Nil(t, err)
+			require.NotNil(t, got)
+			first := got.Generate()
+
+			second := got.Generate()
+			require.NotEqual(t, first, second)
+		})
+	}
+}
+
+func TestNewRandomDigitGenerator(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		param string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr error
+	}{
+		{
+			name: "empty",
+			args: args{
+				param: "",
+			},
+			wantErr: fmt.Errorf("parse int"),
+		},
+		{
+			name: "not an int",
+			args: args{
+				param: "x",
+			},
+			wantErr: fmt.Errorf("parse int"),
+		},
+		{
+			name: "too large",
+			args: args{
+				param: "1001",
+			},
+			wantErr: fmt.Errorf("random packet size must be less than 1000"),
+		},
+		{
+			name: "valid",
+			args: args{
+				param: "12",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := newRandomDigitGenerator(tt.args.param)
 			if tt.wantErr != nil {
 				require.ErrorAs(t, err, &tt.wantErr)
 				require.Nil(t, got)
@@ -137,6 +268,8 @@ func Test_newRandomPacketGenerator(t *testing.T) {
 }
 
 func TestPacketCounterGenerator(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		param   string
@@ -155,7 +288,6 @@ func TestPacketCounterGenerator(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc // capture range variable
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

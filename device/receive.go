@@ -129,7 +129,7 @@ func (device *Device) RoutineReceiveIncoming(
 		}
 		deathSpiral = 0
 
-		device.awg.ASecMux.RLock()
+		device.awg.Mux.RLock()
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
 			if size < MinMessageSize {
@@ -140,37 +140,11 @@ func (device *Device) RoutineReceiveIncoming(
 			packet := bufsArrs[i][:size]
 			var msgType uint32
 			if device.isAWG() {
-				// TODO:
-				// if awg.WaitResponse.ShouldWait.IsSet() {
-				// 	awg.WaitResponse.Channel <- struct{}{}
-				// }
+				msgType, err = device.ProcessAWGPacket(size, &packet, bufsArrs[i])
 
-				if assumedMsgType, ok := packetSizeToMsgType[size]; ok {
-					junkSize := msgTypeToJunkSize[assumedMsgType]
-					// transport size can align with other header types;
-					// making sure we have the right msgType
-					msgType = binary.LittleEndian.Uint32(packet[junkSize : junkSize+4])
-					if msgType == assumedMsgType {
-						packet = packet[junkSize:]
-					} else {
-						device.log.Verbosef("transport packet lined up with another msg type")
-						msgType = binary.LittleEndian.Uint32(packet[:4])
-					}
-				} else {
-					transportJunkSize := device.awg.ASecCfg.TransportHeaderJunkSize
-					msgType = binary.LittleEndian.Uint32(packet[transportJunkSize : transportJunkSize+4])
-					if msgType != MessageTransportType {
-						// probably a junk packet
-						device.log.Verbosef("aSec: Received message with unknown type: %d", msgType)
-						continue
-					}
-
-					// remove junk from bufsArrs by shifting the packet
-					// this buffer is also used for decryption, so it needs to be corrected
-					copy(bufsArrs[i][:size], packet[transportJunkSize:])
-					size -= transportJunkSize
-					// need to reinitialize packet as well
-					packet = packet[:size]
+				if err != nil {
+					device.log.Verbosef("awg: process packet: %v", err)
+					continue
 				}
 			} else {
 				msgType = binary.LittleEndian.Uint32(packet[:4])
@@ -259,7 +233,7 @@ func (device *Device) RoutineReceiveIncoming(
 			default:
 			}
 		}
-		device.awg.ASecMux.RUnlock()
+		device.awg.Mux.RUnlock()
 		for peer, elemsContainer := range elemsByPeer {
 			if peer.isRunning.Load() {
 				peer.queue.inbound.c <- elemsContainer
@@ -318,7 +292,7 @@ func (device *Device) RoutineHandshake(id int) {
 
 	for elem := range device.queue.handshake.c {
 
-		device.awg.ASecMux.RLock()
+		device.awg.Mux.RLock()
 
 		// handle cookie fields and ratelimiting
 
@@ -405,6 +379,9 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
+			// have to reassign msgType for ranged msgType to work
+			msg.Type = elem.msgType
+
 			// consume initiation
 			peer := device.ConsumeMessageInitiation(&msg)
 			if peer == nil {
@@ -436,6 +413,9 @@ func (device *Device) RoutineHandshake(id int) {
 				device.log.Errorf("Failed to decode response message")
 				goto skip
 			}
+
+			// have to reassign msgType for ranged msgType to work
+			msg.Type = elem.msgType
 
 			// consume response
 
@@ -470,7 +450,7 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.SendKeepalive()
 		}
 	skip:
-		device.awg.ASecMux.RUnlock()
+		device.awg.Mux.RUnlock()
 		device.PutMessageBuffer(elem.buffer)
 	}
 }
