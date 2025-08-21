@@ -12,14 +12,12 @@ type IpcFields struct{ Key, Value string }
 type EnumTag string
 
 const (
-	BytesEnumTag        EnumTag = "b"
-	CounterEnumTag      EnumTag = "c"
-	TimestampEnumTag    EnumTag = "t"
-	RandomBytesEnumTag  EnumTag = "r"
-	RandomASCIIEnumTag  EnumTag = "rc"
-	RandomDigitEnumTag  EnumTag = "rd"
-	WaitTimeoutEnumTag  EnumTag = "wt"
-	WaitResponseEnumTag EnumTag = "wr"
+	BytesEnumTag       EnumTag = "b"
+	CounterEnumTag     EnumTag = "c"
+	TimestampEnumTag   EnumTag = "t"
+	RandomBytesEnumTag EnumTag = "r"
+	RandomASCIIEnumTag EnumTag = "rc"
+	RandomDigitEnumTag EnumTag = "rd"
 )
 
 var generatorCreator = map[EnumTag]newGenerator{
@@ -29,8 +27,6 @@ var generatorCreator = map[EnumTag]newGenerator{
 	RandomBytesEnumTag: newRandomBytesGenerator,
 	RandomASCIIEnumTag: newRandomASCIIGenerator,
 	RandomDigitEnumTag: newRandomDigitGenerator,
-	WaitTimeoutEnumTag: newWaitTimeoutGenerator,
-	// WaitResponseEnumTag: newWaitResponseGenerator,
 }
 
 // helper map to determine enumTags are unique

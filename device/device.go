@@ -847,7 +847,6 @@ func (device *Device) handlePostConfig(tempAwg *awg.Protocol) error {
 				ipc.IpcErrorInvalid, "handshake handler validate: %w", err))
 		} else {
 			device.awg.HandshakeHandler = tempAwg.HandshakeHandler
-			device.awg.HandshakeHandler.ControlledJunk.DefaultJunkCount = tempAwg.Cfg.JunkPacketCount
 			device.awg.HandshakeHandler.SpecialJunk.DefaultJunkCount = tempAwg.Cfg.JunkPacketCount
 			device.version = VersionAwgSpecialHandshake
 		}

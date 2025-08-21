@@ -1,9 +1,6 @@
 package awg
 
 import (
-	"errors"
-	"time"
-
 	"github.com/tevino/abool"
 	"go.uber.org/atomic"
 )
@@ -21,25 +18,13 @@ var WaitResponse = struct {
 }
 
 type SpecialHandshakeHandler struct {
-	isFirstDone    bool
-	SpecialJunk    TagJunkPacketGenerators
-	ControlledJunk TagJunkPacketGenerators
-
-	nextItime time.Time
-	ITimeout  time.Duration // seconds
+	SpecialJunk TagJunkPacketGenerators
 
 	IsSet bool
 }
 
 func (handler *SpecialHandshakeHandler) Validate() error {
-	var errs []error
-	if err := handler.SpecialJunk.Validate(); err != nil {
-		errs = append(errs, err)
-	}
-	if err := handler.ControlledJunk.Validate(); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return handler.SpecialJunk.Validate()
 }
 
 func (handler *SpecialHandshakeHandler) GenerateSpecialJunk() [][]byte {
@@ -47,27 +32,5 @@ func (handler *SpecialHandshakeHandler) GenerateSpecialJunk() [][]byte {
 		return nil
 	}
 
-	// TODO: create tests
-	if !handler.isFirstDone {
-		handler.isFirstDone = true
-	} else if !handler.isTimeToSendSpecial() {
-		return nil
-	}
-
-	rv := handler.SpecialJunk.GeneratePackets()
-	handler.nextItime = time.Now().Add(handler.ITimeout)
-
-	return rv
-}
-
-func (handler *SpecialHandshakeHandler) isTimeToSendSpecial() bool {
-	return time.Now().After(handler.nextItime)
-}
-
-func (handler *SpecialHandshakeHandler) GenerateControlledJunk() [][]byte {
-	if !handler.ControlledJunk.IsDefined() {
-		return nil
-	}
-
-	return handler.ControlledJunk.GeneratePackets()
+	return handler.SpecialJunk.GeneratePackets()
 }

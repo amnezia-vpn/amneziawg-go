@@ -135,13 +135,6 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			for _, field := range specialJunkIpcFields {
 				sendf("%s=%s", field.Key, field.Value)
 			}
-			controlledJunkIpcFields := device.awg.HandshakeHandler.ControlledJunk.IpcGetFields()
-			for _, field := range controlledJunkIpcFields {
-				sendf("%s=%s", field.Key, field.Value)
-			}
-			if device.awg.HandshakeHandler.ITimeout != 0 {
-				sendf("itime=%d", device.awg.HandshakeHandler.ITimeout/time.Second)
-			}
 		}
 
 		for _, peer := range device.peers.keyMap {
@@ -412,34 +405,6 @@ func (device *Device) handleDeviceLine(key, value string, tempAwg *awg.Protocol)
 		}
 		device.log.Verbosef("UAPI: Updating %s", key)
 		tempAwg.HandshakeHandler.SpecialJunk.AppendGenerator(generators)
-		tempAwg.HandshakeHandler.IsSet = true
-	case "j1", "j2", "j3":
-		if len(value) == 0 {
-			device.log.Verbosef("UAPI: received empty %s", key)
-			return nil
-		}
-
-		generators, err := awg.ParseTagJunkGenerator(key, value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "invalid %s: %w", key, err)
-		}
-		device.log.Verbosef("UAPI: Updating %s", key)
-
-		tempAwg.HandshakeHandler.ControlledJunk.AppendGenerator(generators)
-		tempAwg.HandshakeHandler.IsSet = true
-	case "itime":
-		if len(value) == 0 {
-			device.log.Verbosef("UAPI: received empty itime")
-			return nil
-		}
-
-		itime, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse itime %w", err)
-		}
-		device.log.Verbosef("UAPI: Updating itime")
-
-		tempAwg.HandshakeHandler.ITimeout = time.Duration(itime) * time.Second
 		tempAwg.HandshakeHandler.IsSet = true
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)

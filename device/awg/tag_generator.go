@@ -184,34 +184,6 @@ func newTimestampGenerator(param string) (Generator, error) {
 	return &TimestampGenerator{}, nil
 }
 
-type WaitTimeoutGenerator struct {
-	waitTimeout time.Duration
-}
-
-func (wtg *WaitTimeoutGenerator) Generate() []byte {
-	time.Sleep(wtg.waitTimeout)
-	return []byte{}
-}
-
-func (wtg *WaitTimeoutGenerator) Size() int {
-	return 0
-}
-
-func newWaitTimeoutGenerator(param string) (Generator, error) {
-	timeout, err := strconv.Atoi(param)
-	if err != nil {
-		return nil, fmt.Errorf("timeout parse int: %w", err)
-	}
-
-	if timeout > 5000 {
-		return nil, fmt.Errorf("timeout must be less than 5000ms")
-	}
-
-	return &WaitTimeoutGenerator{
-		waitTimeout: time.Duration(timeout) * time.Millisecond,
-	}, nil
-}
-
 type PacketCounterGenerator struct {
 }
 
