@@ -53,17 +53,11 @@ const (
 )
 
 const (
-	DefaultMessageInitiationType  uint32 = 1
-	DefaultMessageResponseType    uint32 = 2
-	DefaultMessageCookieReplyType uint32 = 3
-	DefaultMessageTransportType   uint32 = 4
-)
-
-var (
-	MessageInitiationType  uint32 = DefaultMessageInitiationType
-	MessageResponseType    uint32 = DefaultMessageResponseType
-	MessageCookieReplyType uint32 = DefaultMessageCookieReplyType
-	MessageTransportType   uint32 = DefaultMessageTransportType
+	MessageUnknownType     uint32 = 0
+	MessageInitiationType  uint32 = 1
+	MessageResponseType    uint32 = 2
+	MessageCookieReplyType uint32 = 3
+	MessageTransportType   uint32 = 4
 )
 
 const (
@@ -80,11 +74,6 @@ const (
 	MessageTransportOffsetReceiver = 4
 	MessageTransportOffsetCounter  = 8
 	MessageTransportOffsetContent  = 16
-)
-
-var (
-	packetSizeToMsgType map[int]uint32
-	msgTypeToJunkSize   map[uint32]int
 )
 
 /* Type is an 8-bit field, followed by 3 nul bytes,
@@ -205,17 +194,7 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(handshake.remoteStatic[:])
 
-	msgType := DefaultMessageInitiationType
-	if device.isAWG() {
-		device.awg.Mux.RLock()
-		msgType, err = device.awg.GetMsgType(DefaultMessageInitiationType)
-		if err != nil {
-			device.awg.Mux.RUnlock()
-			return nil, fmt.Errorf("get message type: %w", err)
-		}
-
-		device.awg.Mux.RUnlock()
-	}
+	msgType := device.headers.init.Generate()
 
 	msg := MessageInitiation{
 		Type:      msgType,
@@ -274,13 +253,9 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 		chainKey [blake2s.Size]byte
 	)
 
-	device.awg.Mux.RLock()
-
 	if msg.Type != MessageInitiationType {
-		device.awg.Mux.RUnlock()
 		return nil
 	}
-	device.awg.Mux.RUnlock()
 
 	device.staticIdentity.RLock()
 	defer device.staticIdentity.RUnlock()
@@ -395,19 +370,7 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 	}
 
 	var msg MessageResponse
-	if device.isAWG() {
-		device.awg.Mux.RLock()
-		msg.Type, err = device.awg.GetMsgType(DefaultMessageResponseType)
-		if err != nil {
-			device.awg.Mux.RUnlock()
-			return nil, fmt.Errorf("get message type: %w", err)
-		}
-
-		device.awg.Mux.RUnlock()
-	} else {
-		msg.Type = DefaultMessageResponseType
-	}
-
+	msg.Type = device.headers.response.Generate()
 	msg.Sender = handshake.localIndex
 	msg.Receiver = handshake.remoteIndex
 
@@ -457,13 +420,9 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 }
 
 func (device *Device) ConsumeMessageResponse(msg *MessageResponse) *Peer {
-	device.awg.Mux.RLock()
-
 	if msg.Type != MessageResponseType {
-		device.awg.Mux.RUnlock()
 		return nil
 	}
-	device.awg.Mux.RUnlock()
 
 	// lookup handshake by receiver
 

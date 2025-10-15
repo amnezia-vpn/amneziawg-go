@@ -7,8 +7,10 @@ package device
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"math/big"
 	"net"
 	"os"
 	"sync"
@@ -123,41 +125,28 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		peer.device.log.Errorf("%v - Failed to create initiation message: %v", peer, err)
 		return err
 	}
+
 	var sendBuffer [][]byte
 
-	// so only packet processed for cookie generation
-	var junkedHeader []byte
-	if peer.device.version >= VersionAwg {
-		var junks [][]byte
-		if peer.device.version == VersionAwgSpecialHandshake {
-			peer.device.awg.Mux.RLock()
-			// set junks depending on packet type
-			junks = peer.device.awg.HandshakeHandler.GenerateSpecialJunk()
-			if junks != nil {
-				peer.device.log.Verbosef("%v - Special junks sent", peer)
-			}
-			peer.device.awg.Mux.RUnlock()
-		} else {
-			junks = make([][]byte, 0, peer.device.awg.Cfg.JunkPacketCount)
+	for _, ipacket := range peer.device.ipackets {
+		if ipacket != nil {
+			buf := make([]byte, ipacket.ObfuscatedLen(0))
+			ipacket.Obfuscate(buf, nil)
+			sendBuffer = append(sendBuffer, buf)
 		}
-		peer.device.awg.Mux.RLock()
-		peer.device.awg.JunkCreator.CreateJunkPackets(&junks)
-		peer.device.awg.Mux.RUnlock()
+	}
 
-		if len(junks) > 0 {
-			err = peer.SendBuffers(junks)
+	jc := peer.device.junk.count
+	jmin := peer.device.junk.min
+	jmax := peer.device.junk.max
 
-			if err != nil {
-				peer.device.log.Errorf("%v - Failed to send junk packets: %v", peer, err)
-				return err
-			}
-		}
+	for i := 0; i < jc; i++ {
+		nBig, _ := rand.Int(rand.Reader, big.NewInt(int64(jmax-jmin+1)))
+		n := int(nBig.Int64()) + jmin
 
-		junkedHeader, err = peer.device.awg.CreateInitHeaderJunk()
-		if err != nil {
-			peer.device.log.Errorf("%v - %v", peer, err)
-			return err
-		}
+		buf := make([]byte, n)
+		rand.Read(buf)
+		sendBuffer = append(sendBuffer, buf)
 	}
 
 	var buf [MessageInitiationSize]byte
@@ -165,14 +154,26 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	binary.Write(writer, binary.LittleEndian, msg)
 	packet := writer.Bytes()
 	peer.cookieGenerator.AddMacs(packet)
-	junkedHeader = append(junkedHeader, packet...)
 
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	sendBuffer = append(sendBuffer, junkedHeader)
+	if padding := peer.device.paddings.init; padding > 0 {
+		buf := make([]byte, padding+len(packet))
+		rand.Read(buf[:padding])
+		copy(buf[padding:], packet)
+		packet = buf
+	}
 
-	err = peer.SendAndCountBuffers(sendBuffer)
+	if chain := peer.device.dpackets.init; chain != nil {
+		buf := make([]byte, chain.ObfuscatedLen(len(packet)))
+		chain.Obfuscate(buf, packet)
+		packet = buf
+	}
+
+	sendBuffer = append(sendBuffer, packet)
+
+	err = peer.SendBuffers(sendBuffer)
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
 	}
@@ -194,19 +195,12 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	junkedHeader, err := peer.device.awg.CreateResponseHeaderJunk()
-	if err != nil {
-		peer.device.log.Errorf("%v - %v", peer, err)
-		return err
-	}
-
 	var buf [MessageResponseSize]byte
 	writer := bytes.NewBuffer(buf[:0])
 
 	binary.Write(writer, binary.LittleEndian, response)
 	packet := writer.Bytes()
 	peer.cookieGenerator.AddMacs(packet)
-	junkedHeader = append(junkedHeader, packet...)
 
 	err = peer.BeginSymmetricSession()
 	if err != nil {
@@ -218,32 +212,32 @@ func (peer *Peer) SendHandshakeResponse() error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
+	if padding := peer.device.paddings.response; padding > 0 {
+		buf := make([]byte, padding+len(packet))
+		rand.Read(buf[:padding])
+		copy(buf[padding:], packet)
+		packet = buf
+	}
+
+	if chain := peer.device.dpackets.response; chain != nil {
+		buf := make([]byte, chain.ObfuscatedLen(len(packet)))
+		chain.Obfuscate(buf, packet)
+		packet = buf
+	}
+
 	// TODO: allocation could be avoided
-	err = peer.SendAndCountBuffers([][]byte{junkedHeader})
+	err = peer.SendBuffers([][]byte{packet})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake response: %v", peer, err)
 	}
 	return err
 }
 
-func (device *Device) SendHandshakeCookie(
-	initiatingElem *QueueHandshakeElement,
-) error {
+func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement) error {
 	device.log.Verbosef("Sending cookie response for denied handshake message for %v", initiatingElem.endpoint.DstToString())
 
 	sender := binary.LittleEndian.Uint32(initiatingElem.packet[4:8])
-	msgType := DefaultMessageCookieReplyType
-	if device.isAWG() {
-		device.awg.Mux.RLock()
-
-		var err error
-		msgType, err = device.awg.GetMsgType(DefaultMessageCookieReplyType)
-		device.awg.Mux.RUnlock()
-		if err != nil {
-			device.log.Errorf("Get message type for cookie reply: %v", err)
-			return err
-		}
-	}
+	msgType := device.headers.cookie.Generate()
 
 	reply, err := device.cookieChecker.CreateReply(
 		initiatingElem.packet,
@@ -256,19 +250,25 @@ func (device *Device) SendHandshakeCookie(
 		return err
 	}
 
-	junkedHeader, err := device.awg.CreateCookieReplyHeaderJunk()
-	if err != nil {
-		device.log.Errorf("%v - %v", device, err)
-		return err
-	}
-
 	var buf [MessageCookieReplySize]byte
 	writer := bytes.NewBuffer(buf[:0])
 	binary.Write(writer, binary.LittleEndian, reply)
+	packet := writer.Bytes()
 
-	junkedHeader = append(junkedHeader, writer.Bytes()...)
+	if padding := device.paddings.cookie; padding > 0 {
+		buf := make([]byte, padding+len(packet))
+		rand.Read(buf[:padding])
+		copy(buf[padding:], packet)
+		packet = buf
+	}
+
+	if chain := device.dpackets.cookie; chain != nil {
+		buf := make([]byte, chain.ObfuscatedLen(len(packet)))
+		chain.Obfuscate(buf, packet)
+		packet = buf
+	}
 	// TODO: allocation could be avoided
-	device.net.bind.Send([][]byte{junkedHeader}, initiatingElem.endpoint)
+	device.net.bind.Send([][]byte{packet}, initiatingElem.endpoint)
 	return nil
 }
 
@@ -532,18 +532,7 @@ func (device *Device) RoutineEncryption(id int) {
 			fieldReceiver := header[4:8]
 			fieldNonce := header[8:16]
 
-			msgType := DefaultMessageTransportType
-			if device.isAWG() {
-				device.awg.Mux.RLock()
-
-				var err error
-				msgType, err = device.awg.GetMsgType(DefaultMessageTransportType)
-				device.awg.Mux.RUnlock()
-				if err != nil {
-					device.log.Errorf("get message type for transport: %v", err)
-					continue
-				}
-			}
+			msgType := device.headers.transport.Generate()
 
 			binary.LittleEndian.PutUint32(fieldType, msgType)
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
@@ -603,13 +592,24 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			if len(elem.packet) != MessageKeepaliveSize {
 				dataSent = true
 
-				junkedHeader, err := device.awg.CreateTransportHeaderJunk(len(elem.packet))
-				if err != nil {
-					device.log.Errorf("%v - %v", device, err)
-					continue
+				if padding := device.paddings.transport; padding > 0 {
+					// elem.packet is stored at the start of elem.buffer
+					// with zero padding
+					for i := len(elem.packet) - 1; i >= 0; i-- {
+						elem.buffer[i+padding] = elem.buffer[i]
+					}
+					rand.Read(elem.buffer[:padding])
+					elem.packet = elem.buffer[:padding+len(elem.packet)]
 				}
 
-				elem.packet = append(junkedHeader, elem.packet...)
+				if chain := peer.device.dpackets.transport; chain != nil {
+					buf := device.GetMessageBuffer()
+					len := chain.ObfuscatedLen(len(elem.packet))
+					chain.Obfuscate(buf[:], elem.packet)
+					device.PutMessageBuffer(elem.buffer)
+					elem.packet = buf[:len]
+					elem.buffer = buf
+				}
 			}
 			bufs = append(bufs, elem.packet)
 		}
@@ -617,7 +617,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		peer.timersAnyAuthenticatedPacketTraversal()
 		peer.timersAnyAuthenticatedPacketSent()
 
-		err := peer.SendAndCountBuffers(bufs)
+		err := peer.SendBuffers(bufs)
 		if dataSent {
 			peer.timersDataSent()
 		}

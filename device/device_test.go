@@ -227,7 +227,6 @@ func TestTwoDevicePing(t *testing.T) {
 // Run test with -race=false to avoid the race for setting the default msgTypes 2 times
 func TestAWGDevicePing(t *testing.T) {
 	goroutineLeakCheck(t)
-
 	pair := genTestPair(t, true,
 		"jc", "5",
 		"jmin", "500",
@@ -289,6 +288,30 @@ func TestAWGHandshakeDevicePing(t *testing.T) {
 			pair.Send(t, Pong, nil)
 			time.Sleep(2 * time.Second)
 		}
+	})
+}
+
+func TestAWGObfuscatedDevicePing(t *testing.T) {
+	goroutineLeakCheck(t)
+	pair := genTestPair(t, true,
+		"s1", "10",
+		"s2", "10",
+		"s3", "10",
+		"s4", "10",
+		"h1", "12-34",
+		"h2", "56-78",
+		"h3", "9998-12345",
+		"h4", "123123-123456",
+		"di", "<b 0x123401000001000000000001056d757369630679616e64657802727500001c0001000001000112345678><dz 2><d>",
+		"dr", "<b 0x1234><d><t><r 10><rc 10><rd 10><dz 8>",
+		"dc", "<b 0x1234><d>",
+		"dt", "<b 0x2345><ds>",
+	)
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		pair.Send(t, Ping, nil)
+	})
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		pair.Send(t, Pong, nil)
 	})
 }
 

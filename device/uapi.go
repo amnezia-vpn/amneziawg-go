@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/device/awg"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 )
 
@@ -98,43 +97,70 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("fwmark=%d", device.net.fwmark)
 		}
 
-		if device.isAWG() {
-			if device.awg.Cfg.JunkPacketCount != 0 {
-				sendf("jc=%d", device.awg.Cfg.JunkPacketCount)
-			}
-			if device.awg.Cfg.JunkPacketMinSize != 0 {
-				sendf("jmin=%d", device.awg.Cfg.JunkPacketMinSize)
-			}
-			if device.awg.Cfg.JunkPacketMaxSize != 0 {
-				sendf("jmax=%d", device.awg.Cfg.JunkPacketMaxSize)
-			}
-			if device.awg.Cfg.InitHeaderJunkSize != 0 {
-				sendf("s1=%d", device.awg.Cfg.InitHeaderJunkSize)
-			}
-			if device.awg.Cfg.ResponseHeaderJunkSize != 0 {
-				sendf("s2=%d", device.awg.Cfg.ResponseHeaderJunkSize)
-			}
-			if device.awg.Cfg.CookieReplyHeaderJunkSize != 0 {
-				sendf("s3=%d", device.awg.Cfg.CookieReplyHeaderJunkSize)
-			}
-			if device.awg.Cfg.TransportHeaderJunkSize != 0 {
-				sendf("s4=%d", device.awg.Cfg.TransportHeaderJunkSize)
-			}
-			for i, magicHeader := range device.awg.Cfg.MagicHeaders.Values {
-				if magicHeader.Min > 4 {
-					if magicHeader.Min == magicHeader.Max {
-						sendf("h%d=%d", i+1, magicHeader.Min)
-						continue
-					}
+		if device.junk.count != 0 {
+			sendf("jc=%d", device.junk.count)
+		}
 
-					sendf("h%d=%d-%d", i+1, magicHeader.Min, magicHeader.Max)
-				}
-			}
+		if device.junk.min != 0 {
+			sendf("jmin=%d", device.junk.min)
+		}
 
-			specialJunkIpcFields := device.awg.HandshakeHandler.SpecialJunk.IpcGetFields()
-			for _, field := range specialJunkIpcFields {
-				sendf("%s=%s", field.Key, field.Value)
+		if device.junk.max != 0 {
+			sendf("jmax=%d", device.junk.max)
+		}
+
+		if device.paddings.init != 0 {
+			sendf("s1=%d", device.paddings.init)
+		}
+
+		if device.paddings.response != 0 {
+			sendf("s2=%d", device.paddings.response)
+		}
+
+		if device.paddings.cookie != 0 {
+			sendf("s3=%d", device.paddings.cookie)
+		}
+
+		if device.paddings.transport != 0 {
+			sendf("s4=%d", device.paddings.transport)
+		}
+
+		if device.headers.init != nil {
+			sendf("h1=%s", device.headers.init.GenSpec())
+		}
+
+		if device.headers.response != nil {
+			sendf("h2=%s", device.headers.response.GenSpec())
+		}
+
+		if device.headers.cookie != nil {
+			sendf("h3=%s", device.headers.cookie.GenSpec())
+		}
+
+		if device.headers.transport != nil {
+			sendf("h4=%s", device.headers.transport.GenSpec())
+		}
+
+		for i, ipacket := range device.ipackets {
+			if ipacket != nil {
+				sendf("i%d=%s", i+1, ipacket.Spec)
 			}
+		}
+
+		if device.dpackets.init != nil {
+			sendf("di=%s", device.dpackets.init.Spec)
+		}
+
+		if device.dpackets.response != nil {
+			sendf("dr=%s", device.dpackets.response.Spec)
+		}
+
+		if device.dpackets.cookie != nil {
+			sendf("dc=%s", device.dpackets.cookie.Spec)
+		}
+
+		if device.dpackets.transport != nil {
+			sendf("dt=%s", device.dpackets.transport.Spec)
 		}
 
 		for _, peer := range device.peers.keyMap {
@@ -187,18 +213,16 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 		}
 	}()
 
+	ipcDev := new(ipcSetDevice)
 	peer := new(ipcSetPeer)
 	deviceConfig := true
-
-	tempAwg := awg.Protocol{}
-	tempAwg.Cfg.MagicHeaders.Values = make([]awg.MagicHeader, 4)
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			// Blank line means terminate operation.
-			err := device.handlePostConfig(&tempAwg)
+			err := ipcDev.mergeWithDevice(device)
 			if err != nil {
 				return err
 			}
@@ -229,7 +253,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 
 		var err error
 		if deviceConfig {
-			err = device.handleDeviceLine(key, value, &tempAwg)
+			err = device.handleDeviceLine(key, value)
 		} else {
 			err = device.handlePeerLine(peer, key, value)
 		}
@@ -237,7 +261,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 			return err
 		}
 	}
-	err = device.handlePostConfig(&tempAwg)
+	err = ipcDev.mergeWithDevice(device)
 	if err != nil {
 		return err
 	}
@@ -249,7 +273,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 	return nil
 }
 
-func (device *Device) handleDeviceLine(key, value string, tempAwg *awg.Protocol) error {
+func (device *Device) handleDeviceLine(key, value string) error {
 	switch key {
 	case "private_key":
 		var sk NoisePrivateKey
@@ -300,112 +324,177 @@ func (device *Device) handleDeviceLine(key, value string, tempAwg *awg.Protocol)
 		device.RemoveAllPeers()
 
 	case "jc":
-		junkPacketCount, err := strconv.Atoi(value)
+		jc, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse junk_packet_count %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jc: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating junk_packet_count")
-		tempAwg.Cfg.JunkPacketCount = junkPacketCount
-		tempAwg.Cfg.IsSet = true
+		if jc <= 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "jc must be a positive value")
+		}
+		device.log.Verbosef("UAPI: Updating junk count")
+		device.junk.count = jc
 
 	case "jmin":
-		junkPacketMinSize, err := strconv.Atoi(value)
+		jmin, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse junk_packet_min_size %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmin: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating junk_packet_min_size")
-		tempAwg.Cfg.JunkPacketMinSize = junkPacketMinSize
-		tempAwg.Cfg.IsSet = true
+		if jmin <= 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "jmin must be a positive value")
+		}
+		device.log.Verbosef("UAPI: Updating junk min")
+		device.junk.min = jmin
 
 	case "jmax":
-		junkPacketMaxSize, err := strconv.Atoi(value)
+		jmax, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse junk_packet_max_size %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmax: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating junk_packet_max_size")
-		tempAwg.Cfg.JunkPacketMaxSize = junkPacketMaxSize
-		tempAwg.Cfg.IsSet = true
+		if jmax <= 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "jmax must be a positive value")
+		}
+		device.log.Verbosef("UAPI: Updating junk max")
+		device.junk.max = jmax
 
 	case "s1":
-		initPacketJunkSize, err := strconv.Atoi(value)
+		padding, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse init_packet_junk_size %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s1: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating init_packet_junk_size")
-		tempAwg.Cfg.InitHeaderJunkSize = initPacketJunkSize
-		tempAwg.Cfg.IsSet = true
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s1 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s1 padding")
+		device.paddings.init = padding
 
 	case "s2":
-		responsePacketJunkSize, err := strconv.Atoi(value)
+		padding, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse response_packet_junk_size %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s2: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating response_packet_junk_size")
-		tempAwg.Cfg.ResponseHeaderJunkSize = responsePacketJunkSize
-		tempAwg.Cfg.IsSet = true
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s2 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s2 padding")
+		device.paddings.response = padding
 
 	case "s3":
-		cookieReplyPacketJunkSize, err := strconv.Atoi(value)
+		padding, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse cookie_reply_packet_junk_size %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s3: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating cookie_reply_packet_junk_size")
-		tempAwg.Cfg.CookieReplyHeaderJunkSize = cookieReplyPacketJunkSize
-		tempAwg.Cfg.IsSet = true
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s3 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s3 padding")
+		device.paddings.cookie = padding
 
 	case "s4":
-		transportPacketJunkSize, err := strconv.Atoi(value)
+		padding, err := strconv.Atoi(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "parse transport_packet_junk_size %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s4: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating transport_packet_junk_size")
-		tempAwg.Cfg.TransportHeaderJunkSize = transportPacketJunkSize
-		tempAwg.Cfg.IsSet = true
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s4 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s4 padding")
+		device.paddings.transport = padding
+
 	case "h1":
-		initMagicHeader, err := awg.ParseMagicHeader(key, value)
+		header, err := newMagicHeader(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "uapi: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H1: %w", err)
 		}
+		device.headers.init = header
 
-		tempAwg.Cfg.MagicHeaders.Values[0] = initMagicHeader
-		tempAwg.Cfg.IsSet = true
 	case "h2":
-		responseMagicHeader, err := awg.ParseMagicHeader(key, value)
+		header, err := newMagicHeader(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "uapi: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H2: %w", err)
 		}
+		device.headers.response = header
 
-		tempAwg.Cfg.MagicHeaders.Values[1] = responseMagicHeader
-		tempAwg.Cfg.IsSet = true
 	case "h3":
-		cookieReplyMagicHeader, err := awg.ParseMagicHeader(key, value)
+		header, err := newMagicHeader(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "uapi: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H3: %w", err)
 		}
+		device.headers.cookie = header
 
-		tempAwg.Cfg.MagicHeaders.Values[2] = cookieReplyMagicHeader
-		tempAwg.Cfg.IsSet = true
 	case "h4":
-		transportMagicHeader, err := awg.ParseMagicHeader(key, value)
+		header, err := newMagicHeader(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "uapi: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H4: %w", err)
 		}
+		device.headers.transport = header
 
-		tempAwg.Cfg.MagicHeaders.Values[3] = transportMagicHeader
-		tempAwg.Cfg.IsSet = true
-	case "i1", "i2", "i3", "i4", "i5":
-		if len(value) == 0 {
-			device.log.Verbosef("UAPI: received empty %s", key)
-			return nil
-		}
-
-		generators, err := awg.ParseTagJunkGenerator(key, value)
+	case "i1":
+		chain, err := newObfChain(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "invalid %s: %w", key, err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I1: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating %s", key)
-		tempAwg.HandshakeHandler.SpecialJunk.AppendGenerator(generators)
-		tempAwg.HandshakeHandler.IsSet = true
+		device.ipackets[0] = chain
+
+	case "i2":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I2: %w", err)
+		}
+		device.ipackets[1] = chain
+
+	case "i3":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I3: %w", err)
+		}
+		device.ipackets[2] = chain
+
+	case "i4":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I4: %w", err)
+		}
+		device.ipackets[3] = chain
+
+	case "i5":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
+		}
+		device.ipackets[4] = chain
+
+	case "di":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse DI: %w", err)
+		}
+		device.log.Verbosef("UAPI: Set DI format")
+		device.dpackets.init = chain
+
+	case "dr":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse DR: %w", err)
+		}
+		device.log.Verbosef("UAPI: Set DR format")
+		device.dpackets.response = chain
+
+	case "dc":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse DC: %w", err)
+		}
+		device.log.Verbosef("UAPI: Set DC format")
+		device.dpackets.cookie = chain
+
+	case "dt":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse DT: %w", err)
+		}
+		device.log.Verbosef("UAPI: Set DT format")
+		device.dpackets.transport = chain
+
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
 	}
@@ -653,4 +742,50 @@ func (device *Device) IpcHandle(socket net.Conn) {
 		}
 		buffered.Flush()
 	}
+}
+
+type ipcSetDevice struct {
+	headers struct {
+		init      *magicHeader
+		response  *magicHeader
+		cookie    *magicHeader
+		transport *magicHeader
+	}
+}
+
+func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
+	if d.headers.init == nil {
+		d.headers.init = device.headers.init
+	}
+
+	if d.headers.response == nil {
+		d.headers.response = device.headers.response
+	}
+
+	if d.headers.cookie == nil {
+		d.headers.cookie = device.headers.cookie
+	}
+
+	if d.headers.transport == nil {
+		d.headers.transport = device.headers.transport
+	}
+
+	headers := []*magicHeader{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
+	for i := 0; i < len(headers); i++ {
+		for j := i + 1; j < len(headers); j++ {
+			left := headers[i]
+			right := headers[j]
+
+			if left.start <= right.end && right.start <= left.end {
+				return errors.New("headers must not overlap")
+			}
+		}
+	}
+
+	device.headers.init = d.headers.init
+	device.headers.response = d.headers.response
+	device.headers.cookie = d.headers.cookie
+	device.headers.transport = d.headers.transport
+
+	return nil
 }
