@@ -99,7 +99,7 @@ func TestCookieMAC1(t *testing.T) {
 			0x8c, 0xe1, 0xe8, 0xfa, 0x67, 0x20, 0x80, 0x6d,
 		}
 		generator.AddMacs(msg)
-		reply, err := checker.CreateReply(msg, 1377, src, DefaultMessageCookieReplyType)
+		reply, err := checker.CreateReply(msg, 1377, src, MessageCookieReplyType)
 		if err != nil {
 			t.Fatal("Failed to create cookie reply:", err)
 		}
