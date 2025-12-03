@@ -3,6 +3,7 @@ package conn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -19,7 +20,6 @@ type streamPacketQueue struct {
 
 func NewBindStdStream() *BindStdStream {
 	return &BindStdStream{
-		queue: make(chan *streamPacketQueue),
 		streamPacketPool: sync.Pool{
 			New: func() any {
 				return new(streamPacketQueue)
@@ -34,6 +34,7 @@ type BindStdStream struct {
 	queue            chan *streamPacketQueue
 	ctx              context.Context
 	cancel           context.CancelFunc
+	wg               sync.WaitGroup
 	streamPacketPool sync.Pool
 	dialer           net.Dialer
 	listenConfig     net.ListenConfig
@@ -43,8 +44,11 @@ func (b *BindStdStream) readFaucet() ReceiveFunc {
 	return func(packets [][]byte, sizes []int, eps []Endpoint) (n int, err error) {
 		select {
 		case <-b.ctx.Done():
-			return 0, io.ErrClosedPipe
-		case streamPacket := <-b.queue:
+			return 0, io.EOF
+		case streamPacket, ok := <-b.queue:
+			if !ok {
+				return 0, io.EOF
+			}
 			if streamPacket.err != nil {
 				return 0, streamPacket.err
 			}
@@ -62,45 +66,48 @@ func (b *BindStdStream) readFaucet() ReceiveFunc {
 }
 
 func (b *BindStdStream) readStream(ep *streamEndpoint) {
+	defer b.wg.Done()
+
 	for {
-		if ep.conn == nil {
-			conn, err := b.dialer.DialContext(b.ctx, "tcp", ep.dialAddr)
-			if err != nil {
-				continue
-			}
+		select {
+		case <-b.ctx.Done():
+			return
+		default:
+		}
 
-			ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
-			if err != nil {
-				continue
-			}
-
-			ep.conn = conn
-			ep.dst = ap
+		if err := ep.DialDst(b.ctx, b.dialer); err != nil {
+			continue
 		}
 
 		sp := b.streamPacketPool.Get().(*streamPacketQueue)
-		sp.n, sp.err = ep.conn.Read(sp.buf[:])
 		sp.ep = ep
+		sp.n, sp.err = ep.conn.Read(sp.buf[:])
 		b.queue <- sp
 
 		if sp.err != nil {
+			ep.mutex.Lock()
+			defer ep.mutex.Unlock()
+
+			ep.conn.Close()
 			ep.conn = nil
 
-			select {
-			case <-b.ctx.Done():
-				break
-			default:
-			}
-
 			if ep.dialAddr == "" {
-				break
+				return
 			}
 		}
 	}
 }
 
 func (b *BindStdStream) accept(listener net.Listener) {
+	defer b.wg.Done()
+
 	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		default:
+		}
+
 		conn, err := listener.Accept()
 		if err != nil {
 			break
@@ -116,12 +123,21 @@ func (b *BindStdStream) accept(listener net.Listener) {
 			dst:  ap,
 		}
 
+		b.wg.Add(1)
+		go func() {
+			defer b.wg.Done()
+			<-b.ctx.Done()
+			conn.Close()
+		}()
+
+		b.wg.Add(1)
 		go b.readStream(ep)
 	}
 }
 
 func (b *BindStdStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error) {
 	b.ctx, b.cancel = context.WithCancel(context.Background())
+	b.queue = make(chan *streamPacketQueue, 1024)
 
 	if port != 0 {
 		listener, err := b.listenConfig.Listen(b.ctx, "tcp", ":"+strconv.Itoa(int(port)))
@@ -129,6 +145,14 @@ func (b *BindStdStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16,
 			return nil, port, err
 		}
 
+		b.wg.Add(1)
+		go func() {
+			defer b.wg.Done()
+			<-b.ctx.Done()
+			listener.Close()
+		}()
+
+		b.wg.Add(1)
 		go b.accept(listener)
 	}
 
@@ -141,6 +165,16 @@ func (b *BindStdStream) SetMark(mark uint32) error {
 
 func (b *BindStdStream) Send(bufs [][]byte, ep Endpoint) error {
 	streamEp := ep.(*streamEndpoint)
+
+	select {
+	case <-b.ctx.Done():
+		return io.ErrClosedPipe
+	default:
+	}
+
+	if err := streamEp.DialDst(b.ctx, b.dialer); err != nil {
+		return nil
+	}
 
 	var errs []error
 	for _, buf := range bufs {
@@ -157,6 +191,16 @@ func (b *BindStdStream) ParseEndpoint(s string) (Endpoint, error) {
 		dialAddr: s,
 	}
 
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		<-b.ctx.Done()
+		if ep.conn != nil {
+			ep.conn.Close()
+		}
+	}()
+
+	b.wg.Add(1)
 	go b.readStream(ep)
 
 	return ep, nil
@@ -166,6 +210,13 @@ func (b *BindStdStream) Close() error {
 	if b.cancel != nil {
 		b.cancel()
 	}
+
+	b.wg.Wait()
+
+	if b.queue != nil {
+		close(b.queue)
+	}
+
 	return nil
 }
 
@@ -179,6 +230,31 @@ type streamEndpoint struct {
 	conn     net.Conn
 	dst      netip.AddrPort
 	dialAddr string
+	mutex    sync.Mutex
+}
+
+func (e *streamEndpoint) DialDst(ctx context.Context, dial net.Dialer) error {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	if e.conn != nil {
+		return nil
+	}
+
+	conn, err := dial.DialContext(ctx, "tcp", e.dialAddr)
+	if err != nil {
+		return fmt.Errorf("failed to dial context: %v", err)
+	}
+
+	ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
+	if err != nil {
+		return fmt.Errorf("failed to dial context: %v", err)
+	}
+
+	e.conn = conn
+	e.dst = ap
+
+	return nil
 }
 
 func (e *streamEndpoint) DstToString() string {
