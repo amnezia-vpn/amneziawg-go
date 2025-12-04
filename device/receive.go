@@ -97,13 +97,13 @@ func (device *Device) RoutineReceiveIncoming(
 		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
 	)
 
-	for i := range bufsArrs {
+	for i := range maxBatchSize {
 		bufsArrs[i] = device.GetMessageBuffer()
 		bufs[i] = bufsArrs[i][:]
 	}
 
 	defer func() {
-		for i := 0; i < maxBatchSize; i++ {
+		for i := range maxBatchSize {
 			if bufsArrs[i] != nil {
 				device.PutMessageBuffer(bufsArrs[i])
 			}
@@ -129,7 +129,6 @@ func (device *Device) RoutineReceiveIncoming(
 		}
 		deathSpiral = 0
 
-		device.awg.Mux.RLock()
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
 			if size < MinMessageSize {
@@ -138,16 +137,12 @@ func (device *Device) RoutineReceiveIncoming(
 
 			// check size of packet
 			packet := bufsArrs[i][:size]
-			var msgType uint32
-			if device.isAWG() {
-				msgType, err = device.ProcessAWGPacket(size, &packet, bufsArrs[i])
 
-				if err != nil {
-					device.log.Verbosef("awg: process packet: %v", err)
-					continue
-				}
-			} else {
-				msgType = binary.LittleEndian.Uint32(packet[:4])
+			// get message padding and type based on information from S1-S4 and H1-H4
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
+			if padding > 0 {
+				copy(packet, packet[padding:])
+				packet = packet[:len(packet)-padding]
 			}
 
 			switch msgType {
@@ -233,7 +228,6 @@ func (device *Device) RoutineReceiveIncoming(
 			default:
 			}
 		}
-		device.awg.Mux.RUnlock()
 		for peer, elemsContainer := range elemsByPeer {
 			if peer.isRunning.Load() {
 				peer.queue.inbound.c <- elemsContainer
@@ -291,9 +285,6 @@ func (device *Device) RoutineHandshake(id int) {
 	device.log.Verbosef("Routine: handshake worker %d - started", id)
 
 	for elem := range device.queue.handshake.c {
-
-		device.awg.Mux.RLock()
-
 		// handle cookie fields and ratelimiting
 
 		switch elem.msgType {
@@ -450,7 +441,6 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.SendKeepalive()
 		}
 	skip:
-		device.awg.Mux.RUnlock()
 		device.PutMessageBuffer(elem.buffer)
 	}
 }
@@ -568,4 +558,58 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 		bufs = bufs[:0]
 		device.PutInboundElementsContainer(elemsContainer)
 	}
+}
+
+func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32) (uint32, int) {
+	size := len(packet)
+
+	if expectedType == MessageUnknownType || expectedType == MessageInitiationType {
+		padding := device.paddings.init
+		header := device.headers.init
+
+		if size == padding+MessageInitiationSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageInitiationType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageResponseType {
+		padding := device.paddings.response
+		header := device.headers.response
+
+		if size == padding+MessageResponseSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageResponseType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageCookieReplyType {
+		padding := device.paddings.cookie
+		header := device.headers.cookie
+
+		if size == padding+MessageCookieReplySize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageCookieReplyType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageTransportType {
+		padding := device.paddings.transport
+		header := device.headers.transport
+
+		if size >= padding+MessageTransportHeaderSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageTransportType, padding
+			}
+		}
+	}
+
+	return MessageUnknownType, 0
 }
