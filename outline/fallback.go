@@ -173,50 +173,52 @@ func genIpcString(cfg *DeviceConfig) (string, error) {
 	return b.String(), nil
 }
 
-func RegisterFallbackParser(opt *mobileproxy.SmartDialerOptions, name string) {
-	opt.RegisterFallbackParser(name, func(ctx context.Context, y smart.YAMLNode) (transport.StreamDialer, string, error) {
-		cfg, err := mapYamlToConfig(y)
+func FallbackParser(ctx context.Context, y smart.YAMLNode) (transport.StreamDialer, string, error) {
+	cfg, err := mapYamlToConfig(y)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to map yaml to config: %v", err)
+	}
+
+	ipc, err := genIpcString(cfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("faield to generate ipc config: %v", err)
+	}
+
+	var prefixes []netip.Prefix
+	for _, address := range cfg.Address {
+		prefix, err := netip.ParsePrefix(address)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to map yaml to config: %v", err)
+			return nil, "", fmt.Errorf("failed to parse address: %v", err)
 		}
+		prefixes = append(prefixes, prefix)
+	}
 
-		ipc, err := genIpcString(cfg)
+	var dns []netip.Addr
+	for _, saddr := range cfg.Dns {
+		addr, err := netip.ParseAddr(saddr)
 		if err != nil {
-			return nil, "", fmt.Errorf("faield to generate ipc config: %v", err)
+			return nil, "", fmt.Errorf("failed to parse dns: %v", err)
 		}
+		dns = append(dns, addr)
+	}
 
-		var prefixes []netip.Prefix
-		for _, address := range cfg.Address {
-			prefix, err := netip.ParsePrefix(address)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to parse address: %v", err)
-			}
-			prefixes = append(prefixes, prefix)
-		}
+	if cfg.Mtu == 0 {
+		cfg.Mtu = 1408
+	}
 
-		var dns []netip.Addr
-		for _, saddr := range cfg.Dns {
-			addr, err := netip.ParseAddr(saddr)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to parse dns: %v", err)
-			}
-			dns = append(dns, addr)
-		}
-
-		if cfg.Mtu == 0 {
-			cfg.Mtu = 1408
-		}
-
-		dialer, err := NewStreamDialer(DialerOptions{
-			Ipc:      ipc,
-			Prefixes: prefixes,
-			Mtu:      cfg.Mtu,
-			Dns:      dns,
-		})
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to create dialer: %v", err)
-		}
-
-		return dialer, ipc, nil
+	dialer, err := NewStreamDialer(DialerOptions{
+		Ipc:      ipc,
+		Prefixes: prefixes,
+		Mtu:      cfg.Mtu,
+		Dns:      dns,
 	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create dialer: %v", err)
+	}
+
+	return dialer, ipc, nil
+}
+
+func RegisterFallbackParser(opt *mobileproxy.SmartDialerOptions, name string) {
+	opt.RegisterFallbackParser(name, FallbackParser)
 }
