@@ -63,8 +63,8 @@ func (d *StreamDialer) DialStream(ctx context.Context, raddr string) (transport.
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse raddr: %v", err)
 	}
-	if len(host) > 0 {
-		host = host[:len(host)-1]
+	if l := len(host); l > 0 && host[l-1] == '.' {
+		host = host[:l-1]
 		raddr = host + ":" + port
 	}
 
