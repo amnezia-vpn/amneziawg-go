@@ -65,7 +65,7 @@ func (d *StreamDialer) DialStream(ctx context.Context, raddr string) (transport.
 	}
 	if l := len(host); l > 0 && host[l-1] == '.' {
 		host = host[:l-1]
-		raddr = host + ":" + port
+		raddr = net.JoinHostPort(host, port)
 	}
 
 	conn, err := d.tnet.DialContext(ctx, "tcp", raddr)
