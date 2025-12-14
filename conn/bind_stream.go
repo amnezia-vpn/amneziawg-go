@@ -17,8 +17,8 @@ type streamPacketQueue struct {
 	n   int
 }
 
-func NewBindStdStream() *BindStdStream {
-	return &BindStdStream{
+func NewBindStream() *BindStream {
+	return &BindStream{
 		streamPacketPool: sync.Pool{
 			New: func() any {
 				return new(streamPacketQueue)
@@ -27,9 +27,9 @@ func NewBindStdStream() *BindStdStream {
 	}
 }
 
-var _ Bind = (*BindStdStream)(nil)
+var _ Bind = (*BindStream)(nil)
 
-type BindStdStream struct {
+type BindStream struct {
 	queue            chan *streamPacketQueue
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -39,7 +39,7 @@ type BindStdStream struct {
 	listenConfig     net.ListenConfig
 }
 
-func (b *BindStdStream) readFaucet() ReceiveFunc {
+func (b *BindStream) readFaucet() ReceiveFunc {
 	return func(packets [][]byte, sizes []int, eps []Endpoint) (n int, err error) {
 		select {
 		case <-b.ctx.Done():
@@ -64,7 +64,7 @@ func (b *BindStdStream) readFaucet() ReceiveFunc {
 	}
 }
 
-func (b *BindStdStream) readStream(ep *streamEndpoint) {
+func (b *BindStream) readStream(ep *streamEndpoint) {
 	defer b.wg.Done()
 
 	for {
@@ -78,12 +78,15 @@ func (b *BindStdStream) readStream(ep *streamEndpoint) {
 			continue
 		}
 
+		var err error
+
 		sp := b.streamPacketPool.Get().(*streamPacketQueue)
 		sp.ep = ep
-		sp.n, sp.err = ep.conn.Read(sp.buf[:])
+		sp.n, err = ep.conn.Read(sp.buf[:])
+		sp.err = err
 		b.queue <- sp
 
-		if sp.err != nil {
+		if err != nil {
 			ep.Close()
 			if !ep.mustDial {
 				return
@@ -92,8 +95,38 @@ func (b *BindStdStream) readStream(ep *streamEndpoint) {
 	}
 }
 
-func (b *BindStdStream) accept(listener net.Listener) {
+func (b *BindStream) listen(port uint16) {
 	defer b.wg.Done()
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		default:
+		}
+
+		listenDone := make(chan struct{})
+
+		listener, err := b.listenConfig.Listen(b.ctx, "tcp", ":"+strconv.Itoa(int(port)))
+		if err != nil {
+			continue
+		}
+
+		b.wg.Add(1)
+		go b.accept(listener, listenDone)
+
+		select {
+		case <-b.ctx.Done():
+		case <-listenDone:
+		}
+
+		listener.Close()
+	}
+}
+
+func (b *BindStream) accept(listener net.Listener, listenDone chan struct{}) {
+	defer b.wg.Done()
+	defer close(listenDone)
 
 	for {
 		select {
@@ -104,55 +137,51 @@ func (b *BindStdStream) accept(listener net.Listener) {
 
 		conn, err := listener.Accept()
 		if err != nil {
+			// log this error somewhere
 			break
 		}
 
-		ep, err := streamEndpointFromConn(conn)
-		if err != nil {
-			continue
-		}
-
 		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
-			<-b.ctx.Done()
-			conn.Close()
-		}()
-
-		b.wg.Add(1)
-		go b.readStream(ep)
+		go b.handleAccepted(conn, listenDone)
 	}
 }
 
-func (b *BindStdStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error) {
+func (b *BindStream) handleAccepted(conn net.Conn, listenDone chan struct{}) {
+	defer b.wg.Done()
+
+	ep, err := streamEndpointFromConn(conn)
+	if err != nil {
+		// log something?
+	}
+
+	b.wg.Add(1)
+	go b.readStream(ep)
+
+	select {
+	case <-b.ctx.Done():
+	case <-listenDone:
+	}
+
+	conn.Close()
+}
+
+func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error) {
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 	b.queue = make(chan *streamPacketQueue, 1024)
 
 	if port != 0 {
-		listener, err := b.listenConfig.Listen(b.ctx, "tcp", ":"+strconv.Itoa(int(port)))
-		if err != nil {
-			return nil, port, err
-		}
-
 		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
-			<-b.ctx.Done()
-			listener.Close()
-		}()
-
-		b.wg.Add(1)
-		go b.accept(listener)
+		go b.listen(port)
 	}
 
 	return []ReceiveFunc{b.readFaucet()}, port, nil
 }
 
-func (b *BindStdStream) SetMark(mark uint32) error {
+func (b *BindStream) SetMark(mark uint32) error {
 	return nil
 }
 
-func (b *BindStdStream) Send(bufs [][]byte, ep Endpoint) error {
+func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
 	streamEp := ep.(*streamEndpoint)
 
 	select {
@@ -175,7 +204,7 @@ func (b *BindStdStream) Send(bufs [][]byte, ep Endpoint) error {
 	return nil
 }
 
-func (b *BindStdStream) ParseEndpoint(s string) (Endpoint, error) {
+func (b *BindStream) ParseEndpoint(s string) (Endpoint, error) {
 	ep, err := streamEndpointFromAddr(s)
 	if err != nil {
 		return nil, err
@@ -194,7 +223,7 @@ func (b *BindStdStream) ParseEndpoint(s string) (Endpoint, error) {
 	return ep, nil
 }
 
-func (b *BindStdStream) Close() error {
+func (b *BindStream) Close() error {
 	if b.cancel != nil {
 		b.cancel()
 	}
@@ -208,7 +237,7 @@ func (b *BindStdStream) Close() error {
 	return nil
 }
 
-func (b *BindStdStream) BatchSize() int {
+func (b *BindStream) BatchSize() int {
 	return 1
 }
 
