@@ -10,3 +10,7 @@ package conn
 func (s *StdNetBind) SetMark(mark uint32) error {
 	return nil
 }
+
+func (b *BindStream) SetMark(mark uint32) error {
+	return nil
+}

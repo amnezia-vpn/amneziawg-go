@@ -37,6 +37,7 @@ type BindStream struct {
 	streamPacketPool sync.Pool
 	dialer           net.Dialer
 	listenConfig     net.ListenConfig
+	port             uint16
 }
 
 func (b *BindStream) readFaucet() ReceiveFunc {
@@ -162,10 +163,12 @@ func (b *BindStream) handleAccepted(conn net.Conn, listenDone chan struct{}) {
 	case <-listenDone:
 	}
 
-	conn.Close()
+	ep.Close()
 }
 
 func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error) {
+	b.port = port
+
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 	b.queue = make(chan *streamPacketQueue, 1024)
 
@@ -175,10 +178,6 @@ func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, er
 	}
 
 	return []ReceiveFunc{b.readFaucet()}, port, nil
-}
-
-func (b *BindStream) SetMark(mark uint32) error {
-	return nil
 }
 
 func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
