@@ -154,16 +154,11 @@ func (b *BindStream) handleAccepted(conn net.Conn, listenDone chan struct{}) {
 	ep.Close()
 }
 
-func (b *BindStream) dial(ep Endpoint) error {
-	streamEp, ok := ep.(*streamEndpoint)
-	if !ok {
-		return nil
-	}
+func (b *BindStream) dial(ep *streamEndpoint) error {
+	ep.mutex.Lock()
+	defer ep.mutex.Unlock()
 
-	streamEp.mutex.Lock()
-	defer streamEp.mutex.Unlock()
-
-	if streamEp.conn != nil {
+	if ep.conn != nil {
 		return nil
 	}
 
@@ -171,18 +166,18 @@ func (b *BindStream) dial(ep Endpoint) error {
 	if err != nil {
 		return fmt.Errorf("failed to dial context: %v", err)
 	}
+	ep.conn = conn
 
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
 		<-b.ctx.Done()
-		streamEp.Close()
+		ep.Close()
 	}()
 
 	b.wg.Add(1)
-	go b.readStream(streamEp)
+	go b.readStream(ep)
 
-	streamEp.conn = conn
 	return nil
 }
 
@@ -201,7 +196,10 @@ func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, er
 }
 
 func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
-	streamEp := ep.(*streamEndpoint)
+	streamEp, ok := ep.(*streamEndpoint)
+	if !ok {
+		return nil
+	}
 
 	select {
 	case <-b.ctx.Done():
@@ -209,7 +207,7 @@ func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
 	default:
 	}
 
-	if err := b.dial(ep); err != nil {
+	if err := b.dial(streamEp); err != nil {
 		return err
 	}
 
