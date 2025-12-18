@@ -69,16 +69,6 @@ func (b *BindStream) readStream(ep *streamEndpoint) {
 	defer b.wg.Done()
 
 	for {
-		select {
-		case <-b.ctx.Done():
-			return
-		default:
-		}
-
-		if err := ep.DialDst(b.ctx, b.dialer); err != nil {
-			continue
-		}
-
 		var err error
 
 		sp := b.streamPacketPool.Get().(*streamPacketQueue)
@@ -89,9 +79,7 @@ func (b *BindStream) readStream(ep *streamEndpoint) {
 
 		if err != nil {
 			ep.Close()
-			if !ep.mustDial {
-				return
-			}
+			return
 		}
 	}
 }
@@ -166,6 +154,38 @@ func (b *BindStream) handleAccepted(conn net.Conn, listenDone chan struct{}) {
 	ep.Close()
 }
 
+func (b *BindStream) dial(ep Endpoint) error {
+	streamEp, ok := ep.(*streamEndpoint)
+	if !ok {
+		return nil
+	}
+
+	streamEp.mutex.Lock()
+	defer streamEp.mutex.Unlock()
+
+	if streamEp.conn != nil {
+		return nil
+	}
+
+	conn, err := b.dialer.DialContext(b.ctx, "tcp", ep.DstToString())
+	if err != nil {
+		return fmt.Errorf("failed to dial context: %v", err)
+	}
+
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		<-b.ctx.Done()
+		streamEp.Close()
+	}()
+
+	b.wg.Add(1)
+	go b.readStream(streamEp)
+
+	streamEp.conn = conn
+	return nil
+}
+
 func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error) {
 	b.port = port
 
@@ -189,8 +209,8 @@ func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
 	default:
 	}
 
-	if err := streamEp.DialDst(b.ctx, b.dialer); err != nil {
-		return nil
+	if err := b.dial(ep); err != nil {
+		return err
 	}
 
 	for _, buf := range bufs {
@@ -204,22 +224,7 @@ func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
 }
 
 func (b *BindStream) ParseEndpoint(s string) (Endpoint, error) {
-	ep, err := streamEndpointFromAddr(s)
-	if err != nil {
-		return nil, err
-	}
-
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		<-b.ctx.Done()
-		ep.Close()
-	}()
-
-	b.wg.Add(1)
-	go b.readStream(ep)
-
-	return ep, nil
+	return streamEndpointFromAddr(s)
 }
 
 func (b *BindStream) Close() error {
@@ -243,10 +248,9 @@ func (b *BindStream) BatchSize() int {
 var _ Endpoint = (*streamEndpoint)(nil)
 
 type streamEndpoint struct {
-	conn     net.Conn
-	dst      netip.AddrPort
-	mustDial bool
-	mutex    sync.Mutex
+	conn  net.Conn
+	dst   netip.AddrPort
+	mutex sync.Mutex
 }
 
 func streamEndpointFromConn(conn net.Conn) (*streamEndpoint, error) {
@@ -268,33 +272,8 @@ func streamEndpointFromAddr(addr string) (*streamEndpoint, error) {
 	}
 
 	return &streamEndpoint{
-		dst:      tcpAddr.AddrPort(),
-		mustDial: true,
+		dst: tcpAddr.AddrPort(),
 	}, nil
-}
-
-func (e *streamEndpoint) DialDst(ctx context.Context, dial net.Dialer) error {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	if e.conn != nil {
-		return nil
-	}
-
-	conn, err := dial.DialContext(ctx, "tcp", e.dst.String())
-	if err != nil {
-		return fmt.Errorf("failed to dial context: %v", err)
-	}
-
-	ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
-	if err != nil {
-		return fmt.Errorf("failed to dial context: %v", err)
-	}
-
-	e.conn = conn
-	e.dst = ap
-
-	return nil
 }
 
 func (e *streamEndpoint) Close() {
