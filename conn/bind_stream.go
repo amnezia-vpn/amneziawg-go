@@ -318,7 +318,7 @@ func (e *streamEndpoint) ReadMsg(buf []byte) (int, error) {
 	if uint32(len(buf)) < size {
 		return 0, io.ErrShortBuffer
 	}
-	return e.conn.Read(buf[:size])
+	return io.ReadFull(e.conn, buf[:size])
 }
 
 func (e *streamEndpoint) WriteMsg(buf []byte) error {
