@@ -2,13 +2,14 @@ package conn
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"net/netip"
 	"strconv"
 	"sync"
+
+	"github.com/amnezia-vpn/amneziawg-go/conceal"
 )
 
 type streamPacketQueue struct {
@@ -39,6 +40,7 @@ type BindStream struct {
 	dialer           net.Dialer
 	listenConfig     net.ListenConfig
 	port             uint16
+	obf              conceal.StreamObfuscator
 }
 
 func (b *BindStream) readFaucet() ReceiveFunc {
@@ -74,7 +76,7 @@ func (b *BindStream) readStream(ep *streamEndpoint) {
 
 		sp := b.streamPacketPool.Get().(*streamPacketQueue)
 		sp.ep = ep
-		sp.n, err = ep.ReadMsg(sp.buf[:])
+		sp.n, err = b.obf.Read(ep.conn, sp.buf[:])
 		sp.err = err
 		b.queue <- sp
 
@@ -213,7 +215,7 @@ func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
 	}
 
 	for _, buf := range bufs {
-		if err := streamEp.WriteMsg(buf); err != nil {
+		if err := b.obf.Write(streamEp.conn, buf); err != nil {
 			streamEp.Close()
 			return err
 		}
@@ -307,26 +309,4 @@ func (e *streamEndpoint) SrcToString() string {
 
 func (e *streamEndpoint) SrcIP() netip.Addr {
 	return netip.Addr{}
-}
-
-func (e *streamEndpoint) ReadMsg(buf []byte) (int, error) {
-	var size uint32
-	if err := binary.Read(e.conn, binary.BigEndian, &size); err != nil {
-		return 0, err
-	}
-
-	if uint32(len(buf)) < size {
-		return 0, io.ErrShortBuffer
-	}
-	return io.ReadFull(e.conn, buf[:size])
-}
-
-func (e *streamEndpoint) WriteMsg(buf []byte) error {
-	size := uint32(len(buf))
-	if err := binary.Write(e.conn, binary.BigEndian, size); err != nil {
-		return err
-	}
-
-	_, err := e.conn.Write(buf)
-	return err
 }
