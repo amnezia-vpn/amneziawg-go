@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 )
 
@@ -87,6 +88,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 		if !device.staticIdentity.privateKey.IsZero() {
 			keyf("private_key", (*[32]byte)(&device.staticIdentity.privateKey))
+		}
+
+		if mb, ok := (device.net.bind).(*conn.Multibind); ok {
+			sendf("network=%s", mb.Proto())
 		}
 
 		if device.net.port != 0 {
@@ -267,6 +272,28 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		}
 		device.log.Verbosef("UAPI: Updating private key")
 		device.SetPrivateKey(sk)
+
+	case "network":
+		mb, ok := (device.net.bind).(*conn.Multibind)
+		if !ok {
+			return ipcErrorf(ipc.IpcErrorInvalid, "conn.Multibind is required to set network")
+		}
+
+		if err := device.BindClose(); err != nil {
+			return ipcErrorf(ipc.IpcErrorPortInUse, "failed to stop bind: %w", err)
+		}
+
+		device.net.Lock()
+		if err := mb.SelectProto(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set network: %w", err)
+		}
+		device.net.Unlock()
+
+		device.log.Verbosef("UAPI: Updating network")
+
+		if err := device.BindUpdate(); err != nil {
+			return ipcErrorf(ipc.IpcErrorPortInUse, "failed to set network: %w", err)
+		}
 
 	case "listen_port":
 		port, err := strconv.ParseUint(value, 10, 16)

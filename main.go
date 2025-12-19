@@ -222,7 +222,7 @@ func main() {
 		return
 	}
 
-	device := device.NewDevice(tdev, conn.NewBindStream(), logger)
+	device := device.NewDevice(tdev, conn.NewDefaultBind(), logger)
 
 	logger.Verbosef("Device started")
 

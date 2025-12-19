@@ -77,8 +77,6 @@ type WinRingBind struct {
 	isOpen atomic.Uint32 // 0, 1, or 2
 }
 
-func NewDefaultBind() Bind { return NewWinRingBind() }
-
 func NewWinRingBind() Bind {
 	if !winrio.Initialize() {
 		return NewStdNetBind()

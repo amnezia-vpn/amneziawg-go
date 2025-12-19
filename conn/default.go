@@ -7,4 +7,6 @@
 
 package conn
 
-func NewDefaultBind() Bind { return NewStdNetBind() }
+func NewDefaultBind() Bind {
+	return NewMultibind(NewStdNetBind(), NewBindStream())
+}
