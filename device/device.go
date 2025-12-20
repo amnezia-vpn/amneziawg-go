@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/amnezia-vpn/amneziawg-go/conceal"
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/ratelimiter"
 	"github.com/amnezia-vpn/amneziawg-go/rwcancel"
@@ -110,7 +111,7 @@ type Device struct {
 		transport int
 	}
 
-	ipackets [5]*obfChain
+	ipackets [5]conceal.Obfs
 }
 
 // deviceState represents the state of a Device.

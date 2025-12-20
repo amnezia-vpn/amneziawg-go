@@ -128,13 +128,13 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	var sendBuffer [][]byte
 
-	for _, ipacket := range peer.device.ipackets {
-		if ipacket != nil {
-			buf := make([]byte, ipacket.ObfuscatedLen(0))
-			ipacket.Obfuscate(buf, nil)
-			sendBuffer = append(sendBuffer, buf)
-		}
-	}
+	// for _, ipacket := range peer.device.ipackets {
+	// 	if ipacket != nil {
+	// 		buf := make([]byte, ipacket.ObfuscatedLen(0))
+	// 		ipacket.Obfuscate(buf, nil)
+	// 		sendBuffer = append(sendBuffer, buf)
+	// 	}
+	// }
 
 	jc := peer.device.junk.count
 	jmin := peer.device.junk.min
@@ -149,7 +149,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		sendBuffer = append(sendBuffer, buf)
 	}
 
-	var buf [MessageInitiationSize]byte
+	var buf [12 + MessageInitiationSize]byte
 	writer := bytes.NewBuffer(buf[:0])
 	binary.Write(writer, binary.LittleEndian, msg)
 	packet := writer.Bytes()

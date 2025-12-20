@@ -26,6 +26,7 @@ func NewBindStream() *BindStream {
 				return new(streamPacketQueue)
 			},
 		},
+		obfs: conceal.DefaultSizedPayloadObfs(),
 	}
 }
 
@@ -40,7 +41,7 @@ type BindStream struct {
 	dialer           net.Dialer
 	listenConfig     net.ListenConfig
 	port             uint16
-	obf              conceal.StreamObfuscator
+	obfs             conceal.Obfs
 }
 
 func (b *BindStream) readFaucet() ReceiveFunc {
@@ -76,7 +77,7 @@ func (b *BindStream) readStream(ep *streamEndpoint) {
 
 		sp := b.streamPacketPool.Get().(*streamPacketQueue)
 		sp.ep = ep
-		sp.n, err = b.obf.Read(ep.conn, sp.buf[:])
+		sp.n, err = ep.conn.Read(sp.buf[:])
 		sp.err = err
 		b.queue <- sp
 
@@ -132,6 +133,7 @@ func (b *BindStream) accept(listener net.Listener, listenDone chan struct{}) {
 			// log this error somewhere
 			break
 		}
+		conn = b.upgradeConn(conn)
 
 		b.wg.Add(1)
 		go b.handleAccepted(conn, listenDone)
@@ -169,6 +171,8 @@ func (b *BindStream) dial(ep *streamEndpoint) error {
 	if err != nil {
 		return fmt.Errorf("failed to dial context: %v", err)
 	}
+
+	conn = b.upgradeConn(conn)
 	ep.conn = conn
 
 	b.wg.Add(1)
@@ -182,6 +186,10 @@ func (b *BindStream) dial(ep *streamEndpoint) error {
 	go b.readStream(ep)
 
 	return nil
+}
+
+func (b *BindStream) upgradeConn(orig net.Conn) net.Conn {
+	return conceal.NewObfuscatedConn(orig, b.obfs)
 }
 
 func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, err error) {
@@ -215,7 +223,7 @@ func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
 	}
 
 	for _, buf := range bufs {
-		if err := b.obf.Write(streamEp.conn, buf); err != nil {
+		if _, err := streamEp.conn.Write(buf); err != nil {
 			streamEp.Close()
 			return err
 		}

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amnezia-vpn/amneziawg-go/conceal"
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 )
@@ -148,7 +149,7 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 		for i, ipacket := range device.ipackets {
 			if ipacket != nil {
-				sendf("i%d=%s", i+1, ipacket.Spec)
+				sendf("i%d=%s", i+1, ipacket.Spec())
 			}
 		}
 
@@ -440,39 +441,39 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		device.headers.transport = header
 
 	case "i1":
-		chain, err := newObfChain(value)
+		obfs, err := conceal.BuildObfs(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I1: %w", err)
 		}
-		device.ipackets[0] = chain
+		device.ipackets[0] = obfs
 
 	case "i2":
-		chain, err := newObfChain(value)
+		obfs, err := conceal.BuildObfs(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I2: %w", err)
 		}
-		device.ipackets[1] = chain
+		device.ipackets[1] = obfs
 
 	case "i3":
-		chain, err := newObfChain(value)
+		obfs, err := conceal.BuildObfs(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I3: %w", err)
 		}
-		device.ipackets[2] = chain
+		device.ipackets[2] = obfs
 
 	case "i4":
-		chain, err := newObfChain(value)
+		obfs, err := conceal.BuildObfs(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I4: %w", err)
 		}
-		device.ipackets[3] = chain
+		device.ipackets[3] = obfs
 
 	case "i5":
-		chain, err := newObfChain(value)
+		obfs, err := conceal.BuildObfs(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
 		}
-		device.ipackets[4] = chain
+		device.ipackets[4] = obfs
 
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
