@@ -1,6 +1,7 @@
 package conceal
 
 import (
+	"bytes"
 	"net"
 	"sync"
 )
@@ -44,10 +45,21 @@ func (c *ObfuscatedConn) Write(b []byte) (n int, err error) {
 		flexBuffer: NewFlexBuffer(b),
 		tmpPool:    &c.bufs,
 	}
+
+	buf := c.bufs.GetBuffer()
+	defer c.bufs.Put(buf)
+
+	writer := bytes.NewBuffer(buf[:0])
+
 	for _, obf := range c.obfs {
-		if err := obf.Write(c.Conn, ctx); err != nil {
+		if err := obf.Write(writer, ctx); err != nil {
 			return 0, err
 		}
 	}
+
+	if _, err := c.Conn.Write(writer.Bytes()); err != nil {
+		return 0, err
+	}
+
 	return ctx.Len(), nil
 }
