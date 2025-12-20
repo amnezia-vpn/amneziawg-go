@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"unicode"
 )
@@ -15,17 +16,16 @@ var (
 
 type readContext struct {
 	*flexBuffer
+	tmpPool      *BufferPool
 	nextDataSize int
 }
 
 func (o *bytesObf) Read(reader io.Reader, ctx *readContext) error {
-	buf := ctx.TempBuffer(len(o.data))
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
-	_, err := io.ReadFull(reader, buf)
-	if err != nil {
+	buf := tmp[:len(o.data)]
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return err
 	}
 
@@ -47,13 +47,11 @@ func (o *dataObf) Read(reader io.Reader, ctx *readContext) error {
 }
 
 func (o *dataSizeObf) Read(reader io.Reader, ctx *readContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
-	_, err := io.ReadFull(reader, buf)
-	if err != nil {
+	buf := tmp[:o.length]
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return err
 	}
 
@@ -68,43 +66,49 @@ func (o *dataSizeObf) Read(reader io.Reader, ctx *readContext) error {
 }
 
 func (o *dataStringObf) Read(reader io.Reader, ctx *readContext) error {
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
+
+	base64len := base64.RawStdEncoding.EncodedLen(ctx.nextDataSize)
+	buf := tmp[:base64len]
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return err
+	}
+
 	data := ctx.PushTail(ctx.nextDataSize)
 	if data == nil {
 		return io.ErrShortBuffer
 	}
 
-	base64len := base64.RawStdEncoding.EncodedLen(ctx.nextDataSize)
-	buf := ctx.TempBuffer(base64len)
-	if buf == nil {
-		return io.ErrShortBuffer
+	if _, err := base64.RawStdEncoding.Decode(data, buf); err != nil {
+		// return buf in case of error
+		ctx.PullTail(len(data))
+		return fmt.Errorf("failed to decode base64: %w", err)
 	}
 
+	return nil
+}
+
+func (o *randObf) Read(reader io.Reader, ctx *readContext) error {
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
+
+	buf := tmp[:o.length]
 	if _, err := io.ReadFull(reader, buf); err != nil {
 		return err
 	}
 
-	_, err := base64.RawStdEncoding.Decode(data, buf)
-	return err
-}
-
-func (o *randObf) Read(reader io.Reader, ctx *readContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
-
-	_, err := io.ReadFull(reader, buf)
-	return err
+	// I guess, there is no way to validate randomness
+	// so just return nil here like everything is fine
+	return nil
 }
 
 func (o *randCharObf) Read(reader io.Reader, ctx *readContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
-	_, err := io.ReadFull(reader, buf)
-	if err != nil {
+	buf := tmp[:o.length]
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return err
 	}
 
@@ -118,13 +122,11 @@ func (o *randCharObf) Read(reader io.Reader, ctx *readContext) error {
 }
 
 func (o *randDigitObf) Read(reader io.Reader, ctx *readContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
-	_, err := io.ReadFull(reader, buf)
-	if err != nil {
+	buf := tmp[:o.length]
+	if _, err := io.ReadFull(reader, buf); err != nil {
 		return err
 	}
 

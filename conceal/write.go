@@ -10,6 +10,7 @@ import (
 
 type writeContext struct {
 	*flexBuffer
+	tmpPool *BufferPool
 }
 
 func (o *bytesObf) Write(writer io.Writer, ctx *writeContext) error {
@@ -28,12 +29,12 @@ func (o *dataObf) Write(writer io.Writer, ctx *writeContext) error {
 }
 
 func (o *dataSizeObf) Write(writer io.Writer, ctx *writeContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
-	size := uint32(ctx.Len())
+	buf := tmp[:o.length]
+
+	size := uint32(ctx.Cap())
 	for i := o.length - 1; i >= 0; i-- {
 		buf[i] = byte(size & 0xFF)
 		size >>= 8
@@ -49,11 +50,11 @@ func (o *dataStringObf) Write(writer io.Writer, ctx *writeContext) error {
 		return io.ErrShortBuffer
 	}
 
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
+
 	base64len := base64.RawStdEncoding.EncodedLen(len(data))
-	buf := ctx.TempBuffer(base64len)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	buf := tmp[:base64len]
 
 	base64.RawStdEncoding.Encode(buf, data)
 
@@ -62,11 +63,10 @@ func (o *dataStringObf) Write(writer io.Writer, ctx *writeContext) error {
 }
 
 func (o *randObf) Write(writer io.Writer, ctx *writeContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
+	buf := tmp[:o.length]
 	rand.Read(buf)
 
 	_, err := writer.Write(buf)
@@ -76,11 +76,10 @@ func (o *randObf) Write(writer io.Writer, ctx *writeContext) error {
 const chars52 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 func (o *randCharObf) Write(writer io.Writer, ctx *writeContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
+	buf := tmp[:o.length]
 	rand.Read(buf)
 	for i := range buf {
 		buf[i] = chars52[buf[i]%52]
@@ -93,11 +92,10 @@ func (o *randCharObf) Write(writer io.Writer, ctx *writeContext) error {
 const digits10 = "0123456789"
 
 func (o *randDigitObf) Write(writer io.Writer, ctx *writeContext) error {
-	buf := ctx.TempBuffer(o.length)
-	if buf == nil {
-		return io.ErrShortBuffer
-	}
+	tmp := ctx.tmpPool.GetBuffer()
+	defer ctx.tmpPool.Put(tmp)
 
+	buf := tmp[:o.length]
 	rand.Read(buf)
 	for i := range buf {
 		buf[i] = digits10[buf[i]%10]

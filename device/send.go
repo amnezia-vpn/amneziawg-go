@@ -149,7 +149,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		sendBuffer = append(sendBuffer, buf)
 	}
 
-	var buf [12 + MessageInitiationSize]byte
+	var buf [MessageInitiationSize]byte
 	writer := bytes.NewBuffer(buf[:0])
 	binary.Write(writer, binary.LittleEndian, msg)
 	packet := writer.Bytes()

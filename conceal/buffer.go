@@ -1,5 +1,7 @@
 package conceal
 
+import "sync"
+
 func NewFlexBuffer(buf []byte) *flexBuffer {
 	return &flexBuffer{
 		buf: buf,
@@ -7,25 +9,31 @@ func NewFlexBuffer(buf []byte) *flexBuffer {
 }
 
 type flexBuffer struct {
-	buf []byte
-}
-
-func (b *flexBuffer) TempBuffer(size int) []byte {
-	if size > cap(b.buf)-len(b.buf) {
-		return nil
-	}
-	return b.buf[len(b.buf) : len(b.buf)+size]
+	buf    []byte
+	offset int
+	len    int
 }
 
 func (b *flexBuffer) PushTail(size int) []byte {
-	oldLen := len(b.buf)
-	newLen := oldLen + size
-	if newLen > cap(b.buf) {
+	newLen := b.len + size
+	if b.offset+newLen > len(b.buf) {
 		return nil
 	}
 
-	b.buf = b.buf[:newLen]
-	return b.buf[oldLen:]
+	oldLen := b.len
+	b.len = newLen
+	return b.buf[b.offset+oldLen : b.offset+newLen]
+}
+
+func (b *flexBuffer) PullTail(size int) []byte {
+	newLen := b.len - size
+	if newLen < 0 {
+		return nil
+	}
+
+	oldLen := b.len
+	b.len = newLen
+	return b.buf[b.offset+newLen : b.offset+oldLen]
 }
 
 func (b *flexBuffer) PullHead(size int) []byte {
@@ -33,15 +41,29 @@ func (b *flexBuffer) PullHead(size int) []byte {
 		size = len(b.buf)
 	}
 
-	if size > len(b.buf) {
+	newOffset := b.offset + size
+	if newOffset+b.len > len(b.buf) {
 		return nil
 	}
 
-	pulled := b.buf[:size]
-	b.buf = b.buf[size:]
-	return pulled
+	oldOffset := b.offset
+	b.offset = newOffset
+
+	return b.buf[oldOffset+b.len : newOffset+b.len]
+}
+
+func (b *flexBuffer) Cap() int {
+	return len(b.buf)
 }
 
 func (b *flexBuffer) Len() int {
-	return len(b.buf)
+	return b.len
+}
+
+type BufferPool struct {
+	sync.Pool
+}
+
+func (p *BufferPool) GetBuffer() []byte {
+	return p.Get().([]byte)
 }
