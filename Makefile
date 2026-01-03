@@ -14,18 +14,18 @@ generate-version-and-build:
 	[ "$$(cat version.go 2>/dev/null)" != "$$ver" ] && \
 	echo "$$ver" > version.go && \
 	git update-index --assume-unchanged version.go || true
-	@$(MAKE) amneziawg-go
+	@$(MAKE) amneziabwg-go
 
-amneziawg-go: $(wildcard *.go) $(wildcard */*.go)
+amneziabwg-go: $(wildcard *.go) $(wildcard */*.go)
 	go build -v -o "$@"
 
-install: amneziawg-go
-	@install -v -d "$(DESTDIR)$(BINDIR)" && install -v -m 0755 "$<" "$(DESTDIR)$(BINDIR)/amneziawg-go"
+install: amneziabwg-go
+	@install -v -d "$(DESTDIR)$(BINDIR)" && install -v -m 0755 "$<" "$(DESTDIR)$(BINDIR)/amneziabwg-go"
 
 test:
 	go test ./...
 
 clean:
-	rm -f amneziawg-go
+	rm -f amneziabwg-go
 
 .PHONY: all clean test install generate-version-and-build

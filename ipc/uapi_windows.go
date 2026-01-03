@@ -62,7 +62,7 @@ func init() {
 func UAPIListen(name string) (net.Listener, error) {
 	listener, err := (&namedpipe.ListenConfig{
 		SecurityDescriptor: UAPISecurityDescriptor,
-	}).Listen(`\\.\pipe\ProtectedPrefix\Administrators\AmneziaWG\` + name)
+	}).Listen(`\\.\pipe\ProtectedPrefix\Administrators\AmneziaBWG\` + name)
 	if err != nil {
 		return nil, err
 	}

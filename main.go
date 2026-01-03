@@ -48,7 +48,7 @@ func warning() {
 
 	fmt.Fprintln(os.Stderr, "┌──────────────────────────────────────────────────────────────┐")
 	fmt.Fprintln(os.Stderr, "│                                                              │")
-	fmt.Fprintln(os.Stderr, "│       Running amneziawg-go is not required because this      │")
+	fmt.Fprintln(os.Stderr, "│       Running amneziabwg-go is not required because this      │")
 	fmt.Fprintln(os.Stderr, "│       kernel has first class support for AmneziaWG. For      │")
 	fmt.Fprintln(os.Stderr, "│       information on installing the kernel module,           │")
 	fmt.Fprintln(os.Stderr, "│       please visit:                                          │")
@@ -59,7 +59,7 @@ func warning() {
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
-		fmt.Printf("amneziawg-go %s\n\nUserspace AmneziaWG daemon for %s-%s.\nInformation available at https://amnezia.org\n", Version, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("amneziabwg-go %s\n\nUserspace AmneziaBWG daemon for %s-%s.\nInformation available at https://amnezia.org\n", Version, runtime.GOOS, runtime.GOARCH)
 		return
 	}
 
@@ -145,7 +145,7 @@ func main() {
 		fmt.Sprintf("(%s) ", interfaceName),
 	)
 
-	logger.Verbosef("Starting amneziawg-go version %s", Version)
+	logger.Verbosef("Starting amneziabwg-go version %s", Version)
 
 	if err != nil {
 		logger.Errorf("Failed to create TUN device: %v", err)
