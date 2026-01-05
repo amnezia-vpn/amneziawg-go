@@ -451,7 +451,7 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.timersAnyAuthenticatedPacketReceived()
 
 			// update control endpoint (handshake packet)
-			peer.SetControlEndpointFromPacket(elem.endpoint)
+			peer.SetEndpointFromPacket(elem.endpoint, nil)
 
 			device.log.Verbosef("%v - Received handshake initiation", peer)
 			peer.rxBytes.Add(uint64(len(elem.packet)))
@@ -482,7 +482,7 @@ func (device *Device) RoutineHandshake(id int) {
 			}
 
 			// update control endpoint (handshake packet)
-			peer.SetControlEndpointFromPacket(elem.endpoint)
+			peer.SetEndpointFromPacket(elem.endpoint, nil)
 
 			device.log.Verbosef("%v - Received handshake response", peer)
 			peer.rxBytes.Add(uint64(len(elem.packet)))
@@ -540,7 +540,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 			validTailPacket = i
 			if peer.ReceivedWithKeypair(elem.keypair) {
-				peer.SetDataEndpointFromPacket(elem.endpoint)
+				peer.SetEndpointFromPacket(nil, elem.endpoint)
 				peer.timersHandshakeComplete()
 				peer.SendStagedPackets()
 			}
@@ -602,7 +602,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 		peer.rxBytes.Add(rxBytesLen)
 		if validTailPacket >= 0 {
-			peer.SetDataEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint)
+			peer.SetEndpointFromPacket(nil, elemsContainer.elems[validTailPacket].endpoint)
 			peer.keepKeyFreshReceiving()
 			peer.timersAnyAuthenticatedPacketTraversal()
 			peer.timersAnyAuthenticatedPacketReceived()
