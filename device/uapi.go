@@ -181,6 +181,11 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("listen_port=%d", device.net.controlPort)
 		}
 
+		// Output data port (for dual-port mode detection by tools)
+		if device.net.dataPort != 0 {
+			sendf("data_port=%d", device.net.dataPort)
+		}
+
 		if device.net.fwmark != 0 {
 			sendf("fwmark=%d", device.net.fwmark)
 		}
@@ -244,12 +249,25 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("protocol_version=1")
 			peer.endpoint.Lock()
 			// Display data endpoint as primary (or control if data is nil)
-			endpoint := peer.endpoint.data
-			if endpoint == nil {
-				endpoint = peer.endpoint.control
+			dataEndpoint := peer.endpoint.data
+			controlEndpoint := peer.endpoint.control
+			if dataEndpoint == nil {
+				dataEndpoint = controlEndpoint
 			}
-			if endpoint != nil {
-				sendf("endpoint=%s", endpoint.DstToString())
+			if dataEndpoint != nil {
+				sendf("endpoint=%s", dataEndpoint.DstToString())
+			}
+			// Output control_endpoint if different from data endpoint
+			if controlEndpoint != nil {
+				controlStr := controlEndpoint.DstToString()
+				dataStr := ""
+				if dataEndpoint != nil {
+					dataStr = dataEndpoint.DstToString()
+				}
+				sendf("control_endpoint=%s", controlStr)
+				if controlStr != dataStr {
+					sendf("control_endpoint_differs=1")
+				}
 			}
 			peer.endpoint.Unlock()
 
