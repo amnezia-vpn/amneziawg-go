@@ -49,7 +49,9 @@ func main() {
 		os.Exit(ExitSetupFailed)
 	}
 
-	device := device.NewDevice(tun, conn.NewDefaultBind(), logger)
+	// Create single bind for both control and data (Phase 1 - single socket mode)
+	bind := conn.NewDefaultBind()
+	device := device.NewDevice(tun, bind, bind, logger)
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Failed to bring up device: %v", err)

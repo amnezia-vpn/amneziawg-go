@@ -222,7 +222,9 @@ func main() {
 		return
 	}
 
-	device := device.NewDevice(tdev, conn.NewDefaultBind(), logger)
+	// Create single bind for both control and data (Phase 1 - single socket mode)
+	bind := conn.NewDefaultBind()
+	device := device.NewDevice(tdev, bind, bind, logger)
 
 	logger.Verbosef("Device started")
 

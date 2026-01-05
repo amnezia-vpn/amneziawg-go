@@ -187,7 +187,7 @@ func genTestPair(
 		if _, ok := tb.(*testing.B); ok && !testing.Verbose() {
 			level = LogLevelError
 		}
-		p.dev = NewDevice(p.tun.TUN(), binds[i], NewLogger(level, fmt.Sprintf("dev%d: ", i)))
+		p.dev = NewDevice(p.tun.TUN(), binds[i], binds[i], NewLogger(level, fmt.Sprintf("dev%d: ", i)))
 		if err := p.dev.IpcSet(cfg[i]); err != nil {
 			tb.Errorf("failed to configure device %d: %v", i, err)
 			p.dev.Close()
@@ -198,7 +198,7 @@ func genTestPair(
 			p.dev.Close()
 			continue
 		}
-		endpointCfg[i^1] = fmt.Sprintf(endpointCfg[i^1], p.dev.net.port)
+		endpointCfg[i^1] = fmt.Sprintf(endpointCfg[i^1], p.dev.net.controlPort)
 	}
 	for i := range pair {
 		p := &pair[i]
@@ -553,25 +553,33 @@ func (t *fakeTUNDeviceSized) BatchSize() int { return t.size }
 func TestBatchSize(t *testing.T) {
 	d := Device{}
 
-	d.net.bind = &fakeBindSized{1}
+	bind1 := &fakeBindSized{1}
+	d.net.controlBind = bind1
+	d.net.dataBind = bind1
 	d.tun.device = &fakeTUNDeviceSized{1}
 	if want, got := 1, d.BatchSize(); got != want {
 		t.Errorf("expected batch size %d, got %d", want, got)
 	}
 
-	d.net.bind = &fakeBindSized{1}
+	bind1b := &fakeBindSized{1}
+	d.net.controlBind = bind1b
+	d.net.dataBind = bind1b
 	d.tun.device = &fakeTUNDeviceSized{128}
 	if want, got := 128, d.BatchSize(); got != want {
 		t.Errorf("expected batch size %d, got %d", want, got)
 	}
 
-	d.net.bind = &fakeBindSized{128}
+	bind128 := &fakeBindSized{128}
+	d.net.controlBind = bind128
+	d.net.dataBind = bind128
 	d.tun.device = &fakeTUNDeviceSized{1}
 	if want, got := 128, d.BatchSize(); got != want {
 		t.Errorf("expected batch size %d, got %d", want, got)
 	}
 
-	d.net.bind = &fakeBindSized{128}
+	bind128b := &fakeBindSized{128}
+	d.net.controlBind = bind128b
+	d.net.dataBind = bind128b
 	d.tun.device = &fakeTUNDeviceSized{128}
 	if want, got := 128, d.BatchSize(); got != want {
 		t.Errorf("expected batch size %d, got %d", want, got)
