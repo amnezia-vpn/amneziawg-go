@@ -607,29 +607,27 @@ func (device *Device) BindUpdate() error {
 	batchSize := netc.controlBind.BatchSize()
 
 	if dualPortMode {
-		// Dual-port mode: use specialized routines for control and data sockets
-		// Control socket: handles handshakes only
+		// Dual-port mode: control socket handles handshakes, data socket handles transport
 		device.net.stopping.Add(len(recvFns))
 		device.queue.handshake.wg.Add(len(recvFns))
 		for _, fn := range recvFns {
-			go device.RoutineReceiveControl(batchSize, fn)
+			go device.RoutineReceive(batchSize, fn, ReceiveModeControl)
 		}
 
-		// Data socket: handles transport only
 		dataBatchSize := netc.dataBind.BatchSize()
 		device.net.stopping.Add(len(dataRecvFns))
 		device.queue.decryption.wg.Add(len(dataRecvFns))
 		for _, fn := range dataRecvFns {
-			go device.RoutineReceiveData(dataBatchSize, fn)
+			go device.RoutineReceive(dataBatchSize, fn, ReceiveModeData)
 		}
 		device.log.Verbosef("UDP binds: control=%d, data=%d", netc.controlPort, netc.dataPort)
 	} else {
-		// Single-port mode: use unified receive routine
+		// Single-port mode: unified receive routine handles all packet types
 		device.net.stopping.Add(len(recvFns))
 		device.queue.decryption.wg.Add(len(recvFns))
 		device.queue.handshake.wg.Add(len(recvFns))
 		for _, fn := range recvFns {
-			go device.RoutineReceiveIncoming(batchSize, fn)
+			go device.RoutineReceive(batchSize, fn, ReceiveModeAll)
 		}
 		device.log.Verbosef("UDP bind on port %d", netc.controlPort)
 	}

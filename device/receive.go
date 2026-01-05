@@ -65,26 +65,61 @@ func (peer *Peer) keepKeyFreshReceiving() {
 	}
 }
 
+// ReceiveMode determines which packet types are processed by RoutineReceive
+type ReceiveMode int
+
+const (
+	ReceiveModeAll     ReceiveMode = iota // single-port: handle both control and data
+	ReceiveModeControl                    // dual-port: control socket, handshake packets only
+	ReceiveModeData                       // dual-port: data socket, transport packets only
+)
+
+func (m ReceiveMode) String() string {
+	switch m {
+	case ReceiveModeAll:
+		return "all"
+	case ReceiveModeControl:
+		return "control"
+	case ReceiveModeData:
+		return "data"
+	}
+	return "unknown"
+}
+
 /* Receives incoming datagrams for the device
  *
  * Every time the bind is updated a new routine is started for
- * IPv4 and IPv6 (separately)
+ * IPv4 and IPv6 (separately). The mode parameter determines which
+ * packet types are processed:
+ * - ReceiveModeAll: handle both control and data packets (single-port mode)
+ * - ReceiveModeControl: handle only handshake packets (dual-port control socket)
+ * - ReceiveModeData: handle only transport packets (dual-port data socket)
  */
-func (device *Device) RoutineReceiveIncoming(
+func (device *Device) RoutineReceive(
 	maxBatchSize int,
 	recv conn.ReceiveFunc,
+	mode ReceiveMode,
 ) {
 	recvName := recv.PrettyName()
 	defer func() {
-		device.log.Verbosef("Routine: receive incoming %s - stopped", recvName)
-		device.queue.decryption.wg.Done()
-		device.queue.handshake.wg.Done()
+		device.log.Verbosef("Routine: receive %s %s - stopped", mode, recvName)
+		switch mode {
+		case ReceiveModeAll:
+			device.queue.decryption.wg.Done()
+			device.queue.handshake.wg.Done()
+		case ReceiveModeControl:
+			device.queue.handshake.wg.Done()
+		case ReceiveModeData:
+			device.queue.decryption.wg.Done()
+		}
 		device.net.stopping.Done()
 	}()
 
-	device.log.Verbosef("Routine: receive incoming %s - started", recvName)
+	device.log.Verbosef("Routine: receive %s %s - started", mode, recvName)
 
 	// receive datagrams until conn is closed
+	handleData := mode == ReceiveModeAll || mode == ReceiveModeData
+	handleControl := mode == ReceiveModeAll || mode == ReceiveModeControl
 
 	var (
 		bufsArrs    = make([]*[MaxMessageSize]byte, maxBatchSize)
@@ -94,8 +129,13 @@ func (device *Device) RoutineReceiveIncoming(
 		count       int
 		endpoints   = make([]conn.Endpoint, maxBatchSize)
 		deathSpiral int
-		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
+		elemsByPeer map[*Peer]*QueueInboundElementsContainer
 	)
+
+	// Only allocate elemsByPeer if we're handling data packets
+	if handleData {
+		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
+	}
 
 	for i := range maxBatchSize {
 		bufsArrs[i] = device.GetMessageBuffer()
@@ -116,7 +156,7 @@ func (device *Device) RoutineReceiveIncoming(
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			device.log.Verbosef("Failed to receive %s packet: %v", recvName, err)
+			device.log.Verbosef("Failed to receive %s %s packet: %v", mode, recvName, err)
 			if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
 				return
 			}
@@ -139,7 +179,12 @@ func (device *Device) RoutineReceiveIncoming(
 			packet := bufsArrs[i][:size]
 
 			// get message padding and type based on information from S1-S4 and H1-H4
-			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
+			// For data-only mode, hint that we expect transport packets
+			expectedType := MessageUnknownType
+			if mode == ReceiveModeData {
+				expectedType = MessageTransportType
+			}
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, expectedType)
 			if padding > 0 {
 				copy(packet, packet[padding:])
 				packet = packet[:len(packet)-padding]
@@ -150,6 +195,10 @@ func (device *Device) RoutineReceiveIncoming(
 			// check if transport
 
 			case MessageTransportType:
+				if !handleData {
+					device.log.Verbosef("Received transport packet on control socket - dropping")
+					continue
+				}
 
 				// check size
 
@@ -197,16 +246,28 @@ func (device *Device) RoutineReceiveIncoming(
 			// otherwise it is a fixed size & handshake related packet
 
 			case MessageInitiationType:
+				if !handleControl {
+					device.log.Verbosef("Received handshake packet on data socket - dropping")
+					continue
+				}
 				if len(packet) != MessageInitiationSize {
 					continue
 				}
 
 			case MessageResponseType:
+				if !handleControl {
+					device.log.Verbosef("Received handshake packet on data socket - dropping")
+					continue
+				}
 				if len(packet) != MessageResponseSize {
 					continue
 				}
 
 			case MessageCookieReplyType:
+				if !handleControl {
+					device.log.Verbosef("Received cookie packet on data socket - dropping")
+					continue
+				}
 				if len(packet) != MessageCookieReplySize {
 					continue
 				}
@@ -228,18 +289,22 @@ func (device *Device) RoutineReceiveIncoming(
 			default:
 			}
 		}
-		for peer, elemsContainer := range elemsByPeer {
-			if peer.isRunning.Load() {
-				peer.queue.inbound.c <- elemsContainer
-				device.queue.decryption.c <- elemsContainer
-			} else {
-				for _, elem := range elemsContainer.elems {
-					device.PutMessageBuffer(elem.buffer)
-					device.PutInboundElement(elem)
+
+		// Dispatch collected transport packets to peers
+		if handleData {
+			for peer, elemsContainer := range elemsByPeer {
+				if peer.isRunning.Load() {
+					peer.queue.inbound.c <- elemsContainer
+					device.queue.decryption.c <- elemsContainer
+				} else {
+					for _, elem := range elemsContainer.elems {
+						device.PutMessageBuffer(elem.buffer)
+						device.PutInboundElement(elem)
+					}
+					device.PutInboundElementsContainer(elemsContainer)
 				}
-				device.PutInboundElementsContainer(elemsContainer)
+				delete(elemsByPeer, peer)
 			}
-			delete(elemsByPeer, peer)
 		}
 	}
 }
@@ -612,247 +677,4 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 	}
 
 	return MessageUnknownType, 0
-}
-
-/* Receives and handles incoming control packets (handshake, cookie) on the control socket.
- * Used in dual-socket mode.
- */
-func (device *Device) RoutineReceiveControl(
-	maxBatchSize int,
-	recv conn.ReceiveFunc,
-) {
-	recvName := recv.PrettyName()
-	defer func() {
-		device.log.Verbosef("Routine: receive control %s - stopped", recvName)
-		device.queue.handshake.wg.Done()
-		device.net.stopping.Done()
-	}()
-
-	device.log.Verbosef("Routine: receive control %s - started", recvName)
-
-	var (
-		bufsArrs    = make([]*[MaxMessageSize]byte, maxBatchSize)
-		bufs        = make([][]byte, maxBatchSize)
-		err         error
-		sizes       = make([]int, maxBatchSize)
-		count       int
-		endpoints   = make([]conn.Endpoint, maxBatchSize)
-		deathSpiral int
-	)
-
-	for i := range maxBatchSize {
-		bufsArrs[i] = device.GetMessageBuffer()
-		bufs[i] = bufsArrs[i][:]
-	}
-
-	defer func() {
-		for i := range maxBatchSize {
-			if bufsArrs[i] != nil {
-				device.PutMessageBuffer(bufsArrs[i])
-			}
-		}
-	}()
-
-	for {
-		count, err = recv(bufs, sizes, endpoints)
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			device.log.Verbosef("Failed to receive control %s packet: %v", recvName, err)
-			if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
-				return
-			}
-			if deathSpiral < 10 {
-				deathSpiral++
-				time.Sleep(time.Second / 3)
-				continue
-			}
-			return
-		}
-		deathSpiral = 0
-
-		for i, size := range sizes[:count] {
-			if size < MinMessageSize {
-				continue
-			}
-
-			packet := bufsArrs[i][:size]
-
-			// get message padding and type
-			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
-			if padding > 0 {
-				copy(packet, packet[padding:])
-				packet = packet[:len(packet)-padding]
-			}
-
-			switch msgType {
-			case MessageInitiationType:
-				if len(packet) != MessageInitiationSize {
-					continue
-				}
-			case MessageResponseType:
-				if len(packet) != MessageResponseSize {
-					continue
-				}
-			case MessageCookieReplyType:
-				if len(packet) != MessageCookieReplySize {
-					continue
-				}
-			case MessageTransportType:
-				// Transport packets on control socket - log warning and drop
-				device.log.Verbosef("Received transport packet on control socket - dropping")
-				continue
-			default:
-				device.log.Verbosef("Received message with unknown type on control socket")
-				continue
-			}
-
-			select {
-			case device.queue.handshake.c <- QueueHandshakeElement{
-				msgType:  msgType,
-				buffer:   bufsArrs[i],
-				packet:   packet,
-				endpoint: endpoints[i],
-			}:
-				bufsArrs[i] = device.GetMessageBuffer()
-				bufs[i] = bufsArrs[i][:]
-			default:
-			}
-		}
-	}
-}
-
-/* Receives and handles incoming data packets (transport) on the data socket.
- * Used in dual-socket mode.
- */
-func (device *Device) RoutineReceiveData(
-	maxBatchSize int,
-	recv conn.ReceiveFunc,
-) {
-	recvName := recv.PrettyName()
-	defer func() {
-		device.log.Verbosef("Routine: receive data %s - stopped", recvName)
-		device.queue.decryption.wg.Done()
-		device.net.stopping.Done()
-	}()
-
-	device.log.Verbosef("Routine: receive data %s - started", recvName)
-
-	var (
-		bufsArrs    = make([]*[MaxMessageSize]byte, maxBatchSize)
-		bufs        = make([][]byte, maxBatchSize)
-		err         error
-		sizes       = make([]int, maxBatchSize)
-		count       int
-		endpoints   = make([]conn.Endpoint, maxBatchSize)
-		deathSpiral int
-		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
-	)
-
-	for i := range maxBatchSize {
-		bufsArrs[i] = device.GetMessageBuffer()
-		bufs[i] = bufsArrs[i][:]
-	}
-
-	defer func() {
-		for i := range maxBatchSize {
-			if bufsArrs[i] != nil {
-				device.PutMessageBuffer(bufsArrs[i])
-			}
-		}
-	}()
-
-	for {
-		count, err = recv(bufs, sizes, endpoints)
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			device.log.Verbosef("Failed to receive data %s packet: %v", recvName, err)
-			if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
-				return
-			}
-			if deathSpiral < 10 {
-				deathSpiral++
-				time.Sleep(time.Second / 3)
-				continue
-			}
-			return
-		}
-		deathSpiral = 0
-
-		for i, size := range sizes[:count] {
-			if size < MinMessageSize {
-				continue
-			}
-
-			packet := bufsArrs[i][:size]
-
-			// get message padding and type
-			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageTransportType)
-			if padding > 0 {
-				copy(packet, packet[padding:])
-				packet = packet[:len(packet)-padding]
-			}
-
-			if msgType != MessageTransportType {
-				// Non-transport packets on data socket - log warning and drop
-				device.log.Verbosef("Received non-transport packet (type=%d) on data socket - dropping", msgType)
-				continue
-			}
-
-			if len(packet) < MessageTransportSize {
-				continue
-			}
-
-			// lookup key pair
-			receiver := binary.LittleEndian.Uint32(
-				packet[MessageTransportOffsetReceiver:MessageTransportOffsetCounter],
-			)
-			value := device.indexTable.Lookup(receiver)
-			keypair := value.keypair
-			if keypair == nil {
-				continue
-			}
-
-			// check keypair expiry
-			if keypair.created.Add(RejectAfterTime).Before(time.Now()) {
-				continue
-			}
-
-			// create work element
-			peer := value.peer
-			elem := device.GetInboundElement()
-			elem.packet = packet
-			elem.buffer = bufsArrs[i]
-			elem.keypair = keypair
-			elem.endpoint = endpoints[i]
-			elem.counter = 0
-
-			elemsForPeer, ok := elemsByPeer[peer]
-			if !ok {
-				elemsForPeer = device.GetInboundElementsContainer()
-				elemsForPeer.Lock()
-				elemsByPeer[peer] = elemsForPeer
-			}
-			elemsForPeer.elems = append(elemsForPeer.elems, elem)
-			bufsArrs[i] = device.GetMessageBuffer()
-			bufs[i] = bufsArrs[i][:]
-		}
-
-		for peer, elemsContainer := range elemsByPeer {
-			if peer.isRunning.Load() {
-				peer.queue.inbound.c <- elemsContainer
-				device.queue.decryption.c <- elemsContainer
-			} else {
-				for _, elem := range elemsContainer.elems {
-					device.PutMessageBuffer(elem.buffer)
-					device.PutInboundElement(elem)
-				}
-				device.PutInboundElementsContainer(elemsContainer)
-			}
-			delete(elemsByPeer, peer)
-		}
-	}
 }
