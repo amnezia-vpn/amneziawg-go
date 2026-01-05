@@ -68,23 +68,12 @@ func (peer *Peer) keepKeyFreshReceiving() {
 // ReceiveMode determines which packet types are processed by RoutineReceive
 type ReceiveMode int
 
+//go:generate go run golang.org/x/tools/cmd/stringer -type ReceiveMode -trimprefix=ReceiveMode
 const (
 	ReceiveModeAll     ReceiveMode = iota // single-port: handle both control and data
 	ReceiveModeControl                    // dual-port: control socket, handshake packets only
 	ReceiveModeData                       // dual-port: data socket, transport packets only
 )
-
-func (m ReceiveMode) String() string {
-	switch m {
-	case ReceiveModeAll:
-		return "all"
-	case ReceiveModeControl:
-		return "control"
-	case ReceiveModeData:
-		return "data"
-	}
-	return "unknown"
-}
 
 /* Receives incoming datagrams for the device
  *
