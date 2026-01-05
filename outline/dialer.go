@@ -38,7 +38,9 @@ func NewStreamDialer(opts DialerOptions) (*StreamDialer, error) {
 		},
 	}
 
-	dev := device.NewDevice(tun, conn.NewDefaultBind(), &awgLogger)
+	controlBind := conn.NewDefaultBind()
+	dataBind := conn.NewDefaultBind()
+	dev := device.NewDevice(tun, controlBind, dataBind, &awgLogger)
 	if err := dev.IpcSet(opts.Ipc); err != nil {
 		return nil, fmt.Errorf("failed to configure device: %v", err)
 	}

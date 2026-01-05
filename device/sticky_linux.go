@@ -134,12 +134,12 @@ func (device *Device) routineRouteListener(_ conn.Bind, netlinkSock int, netlink
 					device.peers.RLock()
 					i := uint32(1)
 					for _, peer := range device.peers.keyMap {
-					peer.endpoint.Lock()
-					if peer.endpoint.data == nil {
-						peer.endpoint.Unlock()
-						continue
-					}
-					nativeEP, _ := peer.endpoint.data.(*conn.StdNetEndpoint)
+						peer.endpoint.Lock()
+						if peer.endpoint.data == nil {
+							peer.endpoint.Unlock()
+							continue
+						}
+						nativeEP, _ := peer.endpoint.data.(*conn.StdNetEndpoint)
 						if nativeEP == nil {
 							peer.endpoint.Unlock()
 							continue

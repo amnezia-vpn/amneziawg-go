@@ -317,8 +317,32 @@ func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
 		return
 	}
 	peer.endpoint.clearSrcOnTx = false
-	// In single-socket mode, update both endpoints
+	// Update both endpoints (used in single-socket mode)
 	peer.endpoint.control = endpoint
+	peer.endpoint.data = endpoint
+}
+
+// SetControlEndpointFromPacket updates only the control endpoint.
+// Used in dual-socket mode for handshake packet roaming.
+func (peer *Peer) SetControlEndpointFromPacket(endpoint conn.Endpoint) {
+	peer.endpoint.Lock()
+	defer peer.endpoint.Unlock()
+	if peer.endpoint.disableRoaming {
+		return
+	}
+	peer.endpoint.clearSrcOnTx = false
+	peer.endpoint.control = endpoint
+}
+
+// SetDataEndpointFromPacket updates only the data endpoint.
+// Used in dual-socket mode for transport packet roaming.
+func (peer *Peer) SetDataEndpointFromPacket(endpoint conn.Endpoint) {
+	peer.endpoint.Lock()
+	defer peer.endpoint.Unlock()
+	if peer.endpoint.disableRoaming {
+		return
+	}
+	peer.endpoint.clearSrcOnTx = false
 	peer.endpoint.data = endpoint
 }
 

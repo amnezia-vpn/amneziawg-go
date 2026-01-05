@@ -6,6 +6,7 @@
 package device
 
 import (
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,7 @@ type Device struct {
 		stopping sync.WaitGroup
 		sync.RWMutex
 		controlBind   conn.Bind // bind interface for control (handshake) packets
-		dataBind      conn.Bind // bind interface for data (transport) packets
+		dataBind      conn.Bind // bind interface for data (transport) packets, may equal controlBind in single-port mode
 		netlinkCancel *rwcancel.RWCancel
 		controlPort   uint16 // control listening port
 		dataPort      uint16 // data listening port
@@ -469,7 +470,7 @@ func closeBindLocked(device *Device) error {
 	if netc.controlBind != nil {
 		err = netc.controlBind.Close()
 	}
-	// Only close dataBind if it's a different instance
+	// Only close dataBind if it's a different instance (dual-port mode)
 	if netc.dataBind != nil && netc.dataBind != netc.controlBind {
 		if e := netc.dataBind.Close(); e != nil && err == nil {
 			err = e
@@ -538,6 +539,12 @@ func (device *Device) BindUpdate() error {
 	// Determine if dual-port mode based on port settings
 	dualPortMode := (netc.controlPort != netc.dataPort && netc.dataPort != 0)
 
+	// Check if trying to switch from single-port to dual-port mode at runtime
+	// This is not supported because we lose the separate dataBind instance in single-port mode
+	if dualPortMode && netc.dataBind == netc.controlBind {
+		return errors.New("cannot switch to dual-port mode at runtime, restart the tunnel")
+	}
+
 	// Open control bind
 	var recvFns []conn.ReceiveFunc
 	recvFns, netc.controlPort, err = netc.controlBind.Open(netc.controlPort)
@@ -557,7 +564,9 @@ func (device *Device) BindUpdate() error {
 			return err
 		}
 	} else {
-		// Single-port mode: data uses same port as control
+		// Single-port mode: data uses same bind and port as control
+		// This ensures dataBind.Send() works correctly
+		netc.dataBind = netc.controlBind
 		netc.dataPort = netc.controlPort
 		dataRecvFns = nil
 	}
@@ -596,24 +605,32 @@ func (device *Device) BindUpdate() error {
 
 	// start receiving routines
 	batchSize := netc.controlBind.BatchSize()
-	device.net.stopping.Add(len(recvFns))
-	device.queue.decryption.wg.Add(len(recvFns)) // each RoutineReceiveIncoming goroutine writes to device.queue.decryption
-	device.queue.handshake.wg.Add(len(recvFns))  // each RoutineReceiveIncoming goroutine writes to device.queue.handshake
-	for _, fn := range recvFns {
-		go device.RoutineReceiveIncoming(batchSize, fn)
-	}
 
-	// If dual-port mode, also start routines for data socket
-	if dataRecvFns != nil {
+	if dualPortMode {
+		// Dual-port mode: use specialized routines for control and data sockets
+		// Control socket: handles handshakes only
+		device.net.stopping.Add(len(recvFns))
+		device.queue.handshake.wg.Add(len(recvFns))
+		for _, fn := range recvFns {
+			go device.RoutineReceiveControl(batchSize, fn)
+		}
+
+		// Data socket: handles transport only
 		dataBatchSize := netc.dataBind.BatchSize()
 		device.net.stopping.Add(len(dataRecvFns))
 		device.queue.decryption.wg.Add(len(dataRecvFns))
-		device.queue.handshake.wg.Add(len(dataRecvFns))
 		for _, fn := range dataRecvFns {
-			go device.RoutineReceiveIncoming(dataBatchSize, fn)
+			go device.RoutineReceiveData(dataBatchSize, fn)
 		}
 		device.log.Verbosef("UDP binds: control=%d, data=%d", netc.controlPort, netc.dataPort)
 	} else {
+		// Single-port mode: use unified receive routine
+		device.net.stopping.Add(len(recvFns))
+		device.queue.decryption.wg.Add(len(recvFns))
+		device.queue.handshake.wg.Add(len(recvFns))
+		for _, fn := range recvFns {
+			go device.RoutineReceiveIncoming(batchSize, fn)
+		}
 		device.log.Verbosef("UDP bind on port %d", netc.controlPort)
 	}
 
