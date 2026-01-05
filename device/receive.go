@@ -65,26 +65,50 @@ func (peer *Peer) keepKeyFreshReceiving() {
 	}
 }
 
+// ReceiveMode determines which packet types are processed by RoutineReceive
+type ReceiveMode int
+
+//go:generate go run golang.org/x/tools/cmd/stringer -type ReceiveMode -trimprefix=ReceiveMode
+const (
+	ReceiveModeAll     ReceiveMode = iota // single-port: handle both control and data
+	ReceiveModeControl                    // dual-port: control socket, handshake packets only
+	ReceiveModeData                       // dual-port: data socket, transport packets only
+)
+
 /* Receives incoming datagrams for the device
  *
  * Every time the bind is updated a new routine is started for
- * IPv4 and IPv6 (separately)
+ * IPv4 and IPv6 (separately). The mode parameter determines which
+ * packet types are processed:
+ * - ReceiveModeAll: handle both control and data packets (single-port mode)
+ * - ReceiveModeControl: handle only handshake packets (dual-port control socket)
+ * - ReceiveModeData: handle only transport packets (dual-port data socket)
  */
-func (device *Device) RoutineReceiveIncoming(
+func (device *Device) RoutineReceive(
 	maxBatchSize int,
 	recv conn.ReceiveFunc,
+	mode ReceiveMode,
 ) {
 	recvName := recv.PrettyName()
 	defer func() {
-		device.log.Verbosef("Routine: receive incoming %s - stopped", recvName)
-		device.queue.decryption.wg.Done()
-		device.queue.handshake.wg.Done()
+		device.log.Verbosef("Routine: receive %s %s - stopped", mode, recvName)
+		switch mode {
+		case ReceiveModeAll:
+			device.queue.decryption.wg.Done()
+			device.queue.handshake.wg.Done()
+		case ReceiveModeControl:
+			device.queue.handshake.wg.Done()
+		case ReceiveModeData:
+			device.queue.decryption.wg.Done()
+		}
 		device.net.stopping.Done()
 	}()
 
-	device.log.Verbosef("Routine: receive incoming %s - started", recvName)
+	device.log.Verbosef("Routine: receive %s %s - started", mode, recvName)
 
 	// receive datagrams until conn is closed
+	handleData := mode == ReceiveModeAll || mode == ReceiveModeData
+	handleControl := mode == ReceiveModeAll || mode == ReceiveModeControl
 
 	var (
 		bufsArrs    = make([]*[MaxMessageSize]byte, maxBatchSize)
@@ -94,8 +118,13 @@ func (device *Device) RoutineReceiveIncoming(
 		count       int
 		endpoints   = make([]conn.Endpoint, maxBatchSize)
 		deathSpiral int
-		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
+		elemsByPeer map[*Peer]*QueueInboundElementsContainer
 	)
+
+	// Only allocate elemsByPeer if we're handling data packets
+	if handleData {
+		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
+	}
 
 	for i := range maxBatchSize {
 		bufsArrs[i] = device.GetMessageBuffer()
@@ -116,7 +145,7 @@ func (device *Device) RoutineReceiveIncoming(
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
-			device.log.Verbosef("Failed to receive %s packet: %v", recvName, err)
+			device.log.Verbosef("Failed to receive %s %s packet: %v", mode, recvName, err)
 			if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
 				return
 			}
@@ -139,7 +168,12 @@ func (device *Device) RoutineReceiveIncoming(
 			packet := bufsArrs[i][:size]
 
 			// get message padding and type based on information from S1-S4 and H1-H4
-			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
+			// For data-only mode, hint that we expect transport packets
+			expectedType := MessageUnknownType
+			if mode == ReceiveModeData {
+				expectedType = MessageTransportType
+			}
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, expectedType)
 			if padding > 0 {
 				copy(packet, packet[padding:])
 				packet = packet[:len(packet)-padding]
@@ -150,6 +184,10 @@ func (device *Device) RoutineReceiveIncoming(
 			// check if transport
 
 			case MessageTransportType:
+				if !handleData {
+					device.log.Verbosef("Received transport packet on control socket - dropping")
+					continue
+				}
 
 				// check size
 
@@ -197,16 +235,28 @@ func (device *Device) RoutineReceiveIncoming(
 			// otherwise it is a fixed size & handshake related packet
 
 			case MessageInitiationType:
+				if !handleControl {
+					device.log.Verbosef("Received handshake packet on data socket - dropping")
+					continue
+				}
 				if len(packet) != MessageInitiationSize {
 					continue
 				}
 
 			case MessageResponseType:
+				if !handleControl {
+					device.log.Verbosef("Received handshake packet on data socket - dropping")
+					continue
+				}
 				if len(packet) != MessageResponseSize {
 					continue
 				}
 
 			case MessageCookieReplyType:
+				if !handleControl {
+					device.log.Verbosef("Received cookie packet on data socket - dropping")
+					continue
+				}
 				if len(packet) != MessageCookieReplySize {
 					continue
 				}
@@ -228,18 +278,22 @@ func (device *Device) RoutineReceiveIncoming(
 			default:
 			}
 		}
-		for peer, elemsContainer := range elemsByPeer {
-			if peer.isRunning.Load() {
-				peer.queue.inbound.c <- elemsContainer
-				device.queue.decryption.c <- elemsContainer
-			} else {
-				for _, elem := range elemsContainer.elems {
-					device.PutMessageBuffer(elem.buffer)
-					device.PutInboundElement(elem)
+
+		// Dispatch collected transport packets to peers
+		if handleData {
+			for peer, elemsContainer := range elemsByPeer {
+				if peer.isRunning.Load() {
+					peer.queue.inbound.c <- elemsContainer
+					device.queue.decryption.c <- elemsContainer
+				} else {
+					for _, elem := range elemsContainer.elems {
+						device.PutMessageBuffer(elem.buffer)
+						device.PutInboundElement(elem)
+					}
+					device.PutInboundElementsContainer(elemsContainer)
 				}
-				device.PutInboundElementsContainer(elemsContainer)
+				delete(elemsByPeer, peer)
 			}
-			delete(elemsByPeer, peer)
 		}
 	}
 }
@@ -385,8 +439,8 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.timersAnyAuthenticatedPacketTraversal()
 			peer.timersAnyAuthenticatedPacketReceived()
 
-			// update endpoint
-			peer.SetEndpointFromPacket(elem.endpoint)
+			// update control endpoint (handshake packet)
+			peer.SetEndpointFromPacket(elem.endpoint, nil)
 
 			device.log.Verbosef("%v - Received handshake initiation", peer)
 			peer.rxBytes.Add(uint64(len(elem.packet)))
@@ -416,8 +470,8 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
-			// update endpoint
-			peer.SetEndpointFromPacket(elem.endpoint)
+			// update control endpoint (handshake packet)
+			peer.SetEndpointFromPacket(elem.endpoint, nil)
 
 			device.log.Verbosef("%v - Received handshake response", peer)
 			peer.rxBytes.Add(uint64(len(elem.packet)))
@@ -475,7 +529,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 			validTailPacket = i
 			if peer.ReceivedWithKeypair(elem.keypair) {
-				peer.SetEndpointFromPacket(elem.endpoint)
+				peer.SetEndpointFromPacket(nil, elem.endpoint)
 				peer.timersHandshakeComplete()
 				peer.SendStagedPackets()
 			}
@@ -537,7 +591,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 		peer.rxBytes.Add(rxBytesLen)
 		if validTailPacket >= 0 {
-			peer.SetEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint)
+			peer.SetEndpointFromPacket(nil, elemsContainer.elems[validTailPacket].endpoint)
 			peer.keepKeyFreshReceiving()
 			peer.timersAnyAuthenticatedPacketTraversal()
 			peer.timersAnyAuthenticatedPacketReceived()

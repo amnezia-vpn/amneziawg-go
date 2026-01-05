@@ -222,9 +222,12 @@ func main() {
 		return
 	}
 
-	// Create single bind for both control and data (Phase 1 - single socket mode)
-	bind := conn.NewDefaultBind()
-	device := device.NewDevice(tdev, bind, bind, logger)
+	// Create separate binds for control and data
+	// In single-port mode: only controlBind is used
+	// In dual-port mode: both binds are used on different ports
+	controlBind := conn.NewDefaultBind()
+	dataBind := conn.NewDefaultBind()
+	device := device.NewDevice(tdev, controlBind, dataBind, logger)
 
 	logger.Verbosef("Device started")
 

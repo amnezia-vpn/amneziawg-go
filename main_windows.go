@@ -49,9 +49,12 @@ func main() {
 		os.Exit(ExitSetupFailed)
 	}
 
-	// Create single bind for both control and data (Phase 1 - single socket mode)
-	bind := conn.NewDefaultBind()
-	device := device.NewDevice(tun, bind, bind, logger)
+	// Create separate binds for control and data
+	// In single-port mode: only controlBind is used
+	// In dual-port mode: both binds are used on different ports
+	controlBind := conn.NewDefaultBind()
+	dataBind := conn.NewDefaultBind()
+	device := device.NewDevice(tun, controlBind, dataBind, logger)
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Failed to bring up device: %v", err)

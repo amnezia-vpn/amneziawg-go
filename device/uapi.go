@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/ipc"
 )
 
@@ -40,6 +41,93 @@ func (s IPCError) ErrorCode() int64 {
 
 func ipcErrorf(code int64, msg string, args ...any) *IPCError {
 	return &IPCError{code: code, err: fmt.Errorf(msg, args...)}
+}
+
+// parseDualEndpoint parses endpoint format:
+// Single: "host:port" or "[ipv6]:port"
+// Dual: "host:controlPort:dataPort" or "[ipv6]:controlPort:dataPort"
+// Returns controlEndpoint, dataEndpoint strings (to be parsed by bind.ParseEndpoint)
+func parseDualEndpoint(value string) (controlAddr, dataAddr string, isDual bool, err error) {
+	// Check for IPv6 bracket notation
+	if strings.HasPrefix(value, "[") {
+		// IPv6 format: [::1]:port or [::1]:port:port
+		closeBracket := strings.Index(value, "]")
+		if closeBracket == -1 {
+			return "", "", false, errors.New("invalid IPv6 endpoint: missing closing bracket")
+		}
+		host := value[:closeBracket+1] // includes brackets
+		remainder := value[closeBracket+1:]
+
+		if !strings.HasPrefix(remainder, ":") {
+			return "", "", false, errors.New("invalid endpoint format: missing port")
+		}
+		remainder = remainder[1:] // remove leading colon
+
+		parts := strings.Split(remainder, ":")
+		if len(parts) == 1 {
+			// Single port: [::1]:51820
+			return value, value, false, nil
+		} else if len(parts) == 2 {
+			// Dual port: [::1]:51820:51821
+			controlAddr = host + ":" + parts[0]
+			dataAddr = host + ":" + parts[1]
+			return controlAddr, dataAddr, true, nil
+		}
+		return "", "", false, errors.New("invalid endpoint format")
+	}
+
+	// IPv4 or hostname format
+	parts := strings.Split(value, ":")
+	if len(parts) == 2 {
+		// Single port: host:port
+		return value, value, false, nil
+	} else if len(parts) == 3 {
+		// Dual port: host:controlPort:dataPort
+		host := parts[0]
+		controlAddr = host + ":" + parts[1]
+		dataAddr = host + ":" + parts[2]
+		return controlAddr, dataAddr, true, nil
+	}
+
+	return "", "", false, errors.New("invalid endpoint format, use 'host:port' or 'host:controlPort:dataPort'")
+}
+
+// parseListenPort parses port format "30000" or "30000:40000"
+// Returns controlPort, dataPort, error
+// Port 0 (dynamic) is allowed in single-port mode but not in dual-port mode
+func parseListenPort(value string) (uint16, uint16, error) {
+	parts := strings.Split(value, ":")
+
+	if len(parts) == 1 {
+		// Single port mode: "30000" or "0" (dynamic)
+		port, err := strconv.ParseUint(parts[0], 10, 16)
+		if err != nil {
+			return 0, 0, err
+		}
+		// Port 0 is allowed in single-port mode (OS assigns port)
+		return uint16(port), uint16(port), nil
+	}
+
+	if len(parts) == 2 {
+		// Dual port mode: "30000:40000"
+		controlPort, err := strconv.ParseUint(parts[0], 10, 16)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid control port: %w", err)
+		}
+		dataPort, err := strconv.ParseUint(parts[1], 10, 16)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid data port: %w", err)
+		}
+		if controlPort == 0 || dataPort == 0 {
+			return 0, 0, errors.New("dynamic port (0) not supported in dual-port mode")
+		}
+		if controlPort == dataPort {
+			return 0, 0, errors.New("control and data ports must be different in dual-port mode, use single port format")
+		}
+		return uint16(controlPort), uint16(dataPort), nil
+	}
+
+	return 0, 0, errors.New("invalid port format, use '30000' or '30000:40000'")
 }
 
 var byteBufferPool = &sync.Pool{
@@ -274,18 +362,17 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		device.SetPrivateKey(sk)
 
 	case "listen_port":
-		port, err := strconv.ParseUint(value, 10, 16)
+		controlPort, dataPort, err := parseListenPort(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse listen_port: %w", err)
 		}
 
 		// update port and rebind
-		device.log.Verbosef("UAPI: Updating listen port")
+		device.log.Verbosef("UAPI: Updating listen port (control=%d, data=%d)", controlPort, dataPort)
 
 		device.net.Lock()
-		// Phase 1: Set both ports to the same value
-		device.net.controlPort = uint16(port)
-		device.net.dataPort = uint16(port)
+		device.net.controlPort = controlPort
+		device.net.dataPort = dataPort
 		device.net.Unlock()
 
 		if err := device.BindUpdate(); err != nil {
@@ -563,15 +650,32 @@ func (device *Device) handlePeerLine(
 
 	case "endpoint":
 		device.log.Verbosef("%v - UAPI: Updating endpoint", peer.Peer)
-		endpoint, err := device.net.controlBind.ParseEndpoint(value)
+
+		controlAddr, dataAddr, isDual, err := parseDualEndpoint(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set endpoint %v: %w", value, err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse endpoint %v: %w", value, err)
 		}
+
+		controlEndpoint, err := device.net.controlBind.ParseEndpoint(controlAddr)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse control endpoint %v: %w", controlAddr, err)
+		}
+
+		var dataEndpoint conn.Endpoint
+		if isDual {
+			dataEndpoint, err = device.net.dataBind.ParseEndpoint(dataAddr)
+			if err != nil {
+				return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse data endpoint %v: %w", dataAddr, err)
+			}
+			device.log.Verbosef("%v - UAPI: Dual endpoint mode (control=%s, data=%s)", peer.Peer, controlAddr, dataAddr)
+		} else {
+			dataEndpoint = controlEndpoint
+		}
+
 		peer.endpoint.Lock()
 		defer peer.endpoint.Unlock()
-		// Phase 1: Set both endpoints to the same value
-		peer.endpoint.control = endpoint
-		peer.endpoint.data = endpoint
+		peer.endpoint.control = controlEndpoint
+		peer.endpoint.data = dataEndpoint
 
 	case "persistent_keepalive_interval":
 		device.log.Verbosef("%v - UAPI: Updating persistent keepalive interval", peer.Peer)

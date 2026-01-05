@@ -310,16 +310,23 @@ func (peer *Peer) Stop() {
 	peer.ZeroAndFlushAll()
 }
 
-func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
+// SetEndpointFromPacket updates peer endpoints from received packets.
+// Pass non-nil controlEndpoint to update the control endpoint (from handshake packets).
+// Pass non-nil dataEndpoint to update the data endpoint (from transport packets).
+// In single-socket mode, pass the same endpoint for both.
+func (peer *Peer) SetEndpointFromPacket(controlEndpoint, dataEndpoint conn.Endpoint) {
 	peer.endpoint.Lock()
 	defer peer.endpoint.Unlock()
 	if peer.endpoint.disableRoaming {
 		return
 	}
 	peer.endpoint.clearSrcOnTx = false
-	// In single-socket mode, update both endpoints
-	peer.endpoint.control = endpoint
-	peer.endpoint.data = endpoint
+	if controlEndpoint != nil {
+		peer.endpoint.control = controlEndpoint
+	}
+	if dataEndpoint != nil {
+		peer.endpoint.data = dataEndpoint
+	}
 }
 
 func (peer *Peer) markEndpointSrcForClearing() {
