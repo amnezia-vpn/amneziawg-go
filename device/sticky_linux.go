@@ -111,11 +111,11 @@ func (device *Device) routineRouteListener(_ conn.Bind, netlinkSock int, netlink
 									break
 								}
 								pePtr.peer.endpoint.Lock()
-								if &pePtr.peer.endpoint.val != pePtr.endpoint {
+								if &pePtr.peer.endpoint.data != pePtr.endpoint {
 									pePtr.peer.endpoint.Unlock()
 									break
 								}
-								if uint32(pePtr.peer.endpoint.val.(*conn.StdNetEndpoint).SrcIfidx()) == ifidx {
+								if uint32(pePtr.peer.endpoint.data.(*conn.StdNetEndpoint).SrcIfidx()) == ifidx {
 									pePtr.peer.endpoint.Unlock()
 									break
 								}
@@ -134,12 +134,12 @@ func (device *Device) routineRouteListener(_ conn.Bind, netlinkSock int, netlink
 					device.peers.RLock()
 					i := uint32(1)
 					for _, peer := range device.peers.keyMap {
-						peer.endpoint.Lock()
-						if peer.endpoint.val == nil {
-							peer.endpoint.Unlock()
-							continue
-						}
-						nativeEP, _ := peer.endpoint.val.(*conn.StdNetEndpoint)
+					peer.endpoint.Lock()
+					if peer.endpoint.data == nil {
+						peer.endpoint.Unlock()
+						continue
+					}
+					nativeEP, _ := peer.endpoint.data.(*conn.StdNetEndpoint)
 						if nativeEP == nil {
 							peer.endpoint.Unlock()
 							continue
@@ -188,7 +188,7 @@ func (device *Device) routineRouteListener(_ conn.Bind, netlinkSock int, netlink
 						reqPeerLock.Lock()
 						reqPeer[i] = peerEndpointPtr{
 							peer:     peer,
-							endpoint: &peer.endpoint.val,
+							endpoint: &peer.endpoint.data,
 						}
 						reqPeerLock.Unlock()
 						peer.endpoint.Unlock()
