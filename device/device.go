@@ -40,9 +40,11 @@ type Device struct {
 	net struct {
 		stopping sync.WaitGroup
 		sync.RWMutex
-		bind          conn.Bind // bind interface
+		controlBind   conn.Bind // bind interface for control (handshake) packets
+		dataBind      conn.Bind // bind interface for data (transport) packets
 		netlinkCancel *rwcancel.RWCancel
-		port          uint16 // listening port
+		controlPort   uint16 // control listening port
+		dataPort      uint16 // data listening port
 		fwmark        uint32 // mark value (0 = disabled)
 		brokenRoaming bool
 	}
@@ -304,12 +306,13 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	return nil
 }
 
-func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
+func NewDevice(tunDevice tun.Device, controlBind conn.Bind, dataBind conn.Bind, logger *Logger) *Device {
 	device := new(Device)
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
-	device.net.bind = bind
+	device.net.controlBind = controlBind
+	device.net.dataBind = dataBind
 	device.tun.device = tunDevice
 	mtu, err := device.tun.device.MTU()
 	if err != nil {
@@ -358,10 +361,17 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
 // is the size used to construct memory pools, and is the allowed batch size for
 // the lifetime of the device.
 func (device *Device) BatchSize() int {
-	size := device.net.bind.BatchSize()
-	dSize := device.tun.device.BatchSize()
-	if size < dSize {
-		size = dSize
+	size := device.net.controlBind.BatchSize()
+	// Check dataBind if it's a different instance
+	if device.net.dataBind != device.net.controlBind {
+		dBindSize := device.net.dataBind.BatchSize()
+		if dBindSize > size {
+			size = dBindSize
+		}
+	}
+	tunSize := device.tun.device.BatchSize()
+	if tunSize > size {
+		size = tunSize
 	}
 	return size
 }
@@ -448,7 +458,7 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 	device.peers.RUnlock()
 }
 
-// closeBindLocked closes the device's net.bind.
+// closeBindLocked closes the device's net binds.
 // The caller must hold the net mutex.
 func closeBindLocked(device *Device) error {
 	var err error
@@ -456,8 +466,14 @@ func closeBindLocked(device *Device) error {
 	if netc.netlinkCancel != nil {
 		netc.netlinkCancel.Cancel()
 	}
-	if netc.bind != nil {
-		err = netc.bind.Close()
+	if netc.controlBind != nil {
+		err = netc.controlBind.Close()
+	}
+	// Only close dataBind if it's a different instance
+	if netc.dataBind != nil && netc.dataBind != netc.controlBind {
+		if e := netc.dataBind.Close(); e != nil && err == nil {
+			err = e
+		}
 	}
 	netc.stopping.Wait()
 	return err
@@ -466,7 +482,7 @@ func closeBindLocked(device *Device) error {
 func (device *Device) Bind() conn.Bind {
 	device.net.Lock()
 	defer device.net.Unlock()
-	return device.net.bind
+	return device.net.controlBind // Return control bind as primary
 }
 
 func (device *Device) BindSetMark(mark uint32) error {
@@ -478,11 +494,17 @@ func (device *Device) BindSetMark(mark uint32) error {
 		return nil
 	}
 
-	// update fwmark on existing bind
+	// update fwmark on existing binds
 	device.net.fwmark = mark
-	if device.isUp() && device.net.bind != nil {
-		if err := device.net.bind.SetMark(mark); err != nil {
+	if device.isUp() && device.net.controlBind != nil {
+		if err := device.net.controlBind.SetMark(mark); err != nil {
 			return err
+		}
+		// Only set on dataBind if it's a different instance
+		if device.net.dataBind != nil && device.net.dataBind != device.net.controlBind {
+			if err := device.net.dataBind.SetMark(mark); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -510,29 +532,58 @@ func (device *Device) BindUpdate() error {
 		return nil
 	}
 
-	// bind to new port
 	var err error
-	var recvFns []conn.ReceiveFunc
 	netc := &device.net
 
-	recvFns, netc.port, err = netc.bind.Open(netc.port)
+	// Determine if dual-port mode based on port settings
+	dualPortMode := (netc.controlPort != netc.dataPort && netc.dataPort != 0)
+
+	// Open control bind
+	var recvFns []conn.ReceiveFunc
+	recvFns, netc.controlPort, err = netc.controlBind.Open(netc.controlPort)
 	if err != nil {
-		netc.port = 0
+		netc.controlPort = 0
 		return err
 	}
 
-	netc.netlinkCancel, err = device.startRouteListener(netc.bind)
+	// Open data bind if dual-port mode
+	var dataRecvFns []conn.ReceiveFunc
+	if dualPortMode {
+		dataRecvFns, netc.dataPort, err = netc.dataBind.Open(netc.dataPort)
+		if err != nil {
+			netc.controlBind.Close()
+			netc.controlPort = 0
+			netc.dataPort = 0
+			return err
+		}
+	} else {
+		// Single-port mode: data uses same port as control
+		netc.dataPort = netc.controlPort
+		dataRecvFns = nil
+	}
+
+	netc.netlinkCancel, err = device.startRouteListener(netc.controlBind)
 	if err != nil {
-		netc.bind.Close()
-		netc.port = 0
+		netc.controlBind.Close()
+		if netc.dataBind != netc.controlBind {
+			netc.dataBind.Close()
+		}
+		netc.controlPort = 0
+		netc.dataPort = 0
 		return err
 	}
 
 	// set fwmark
 	if netc.fwmark != 0 {
-		err = netc.bind.SetMark(netc.fwmark)
+		err = netc.controlBind.SetMark(netc.fwmark)
 		if err != nil {
 			return err
+		}
+		if netc.dataBind != netc.controlBind {
+			err = netc.dataBind.SetMark(netc.fwmark)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -544,15 +595,28 @@ func (device *Device) BindUpdate() error {
 	device.peers.RUnlock()
 
 	// start receiving routines
+	batchSize := netc.controlBind.BatchSize()
 	device.net.stopping.Add(len(recvFns))
 	device.queue.decryption.wg.Add(len(recvFns)) // each RoutineReceiveIncoming goroutine writes to device.queue.decryption
 	device.queue.handshake.wg.Add(len(recvFns))  // each RoutineReceiveIncoming goroutine writes to device.queue.handshake
-	batchSize := netc.bind.BatchSize()
 	for _, fn := range recvFns {
 		go device.RoutineReceiveIncoming(batchSize, fn)
 	}
 
-	device.log.Verbosef("UDP bind has been updated")
+	// If dual-port mode, also start routines for data socket
+	if dataRecvFns != nil {
+		dataBatchSize := netc.dataBind.BatchSize()
+		device.net.stopping.Add(len(dataRecvFns))
+		device.queue.decryption.wg.Add(len(dataRecvFns))
+		device.queue.handshake.wg.Add(len(dataRecvFns))
+		for _, fn := range dataRecvFns {
+			go device.RoutineReceiveIncoming(dataBatchSize, fn)
+		}
+		device.log.Verbosef("UDP binds: control=%d, data=%d", netc.controlPort, netc.dataPort)
+	} else {
+		device.log.Verbosef("UDP bind on port %d", netc.controlPort)
+	}
+
 	return nil
 }
 

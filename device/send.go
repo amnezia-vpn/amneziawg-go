@@ -167,7 +167,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	sendBuffer = append(sendBuffer, packet)
 
-	err = peer.SendBuffers(sendBuffer)
+	err = peer.SendControlBuffers(sendBuffer)
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
 	}
@@ -214,7 +214,7 @@ func (peer *Peer) SendHandshakeResponse() error {
 	}
 
 	// TODO: allocation could be avoided
-	err = peer.SendBuffers([][]byte{packet})
+	err = peer.SendControlBuffers([][]byte{packet})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake response: %v", peer, err)
 	}
@@ -251,7 +251,7 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	}
 
 	// TODO: allocation could be avoided
-	device.net.bind.Send([][]byte{packet}, initiatingElem.endpoint)
+	device.net.controlBind.Send([][]byte{packet}, initiatingElem.endpoint)
 	return nil
 }
 

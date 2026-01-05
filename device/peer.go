@@ -27,8 +27,9 @@ type Peer struct {
 
 	endpoint struct {
 		sync.Mutex
-		val            conn.Endpoint
-		clearSrcOnTx   bool // signal to val.ClearSrc() prior to next packet transmission
+		control        conn.Endpoint // endpoint for control (handshake) packets
+		data           conn.Endpoint // endpoint for data (transport) packets
+		clearSrcOnTx   bool          // signal to endpoint.ClearSrc() prior to next packet transmission
 		disableRoaming bool
 	}
 
@@ -99,7 +100,8 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 
 	// reset endpoint
 	peer.endpoint.Lock()
-	peer.endpoint.val = nil
+	peer.endpoint.control = nil
+	peer.endpoint.data = nil
 	peer.endpoint.disableRoaming = false
 	peer.endpoint.clearSrcOnTx = false
 	peer.endpoint.Unlock()
@@ -122,7 +124,7 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 
 	peer.endpoint.Lock()
-	endpoint := peer.endpoint.val
+	endpoint := peer.endpoint.data
 	if endpoint == nil {
 		peer.endpoint.Unlock()
 		return errors.New("no known endpoint for peer")
@@ -133,7 +135,39 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
-	err := peer.device.net.bind.Send(buffers, endpoint)
+	err := peer.device.net.dataBind.Send(buffers, endpoint)
+	if err == nil {
+		var totalLen uint64
+		for _, b := range buffers {
+			totalLen += uint64(len(b))
+		}
+		peer.txBytes.Add(totalLen)
+	}
+	return err
+}
+
+// SendControlBuffers sends handshake/cookie packets via control bind
+func (peer *Peer) SendControlBuffers(buffers [][]byte) error {
+	peer.device.net.RLock()
+	defer peer.device.net.RUnlock()
+
+	if peer.device.isClosed() {
+		return nil
+	}
+
+	peer.endpoint.Lock()
+	endpoint := peer.endpoint.control
+	if endpoint == nil {
+		peer.endpoint.Unlock()
+		return errors.New("no known endpoint for peer")
+	}
+	if peer.endpoint.clearSrcOnTx {
+		endpoint.ClearSrc()
+		peer.endpoint.clearSrcOnTx = false
+	}
+	peer.endpoint.Unlock()
+
+	err := peer.device.net.controlBind.Send(buffers, endpoint)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {
@@ -283,13 +317,16 @@ func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
 		return
 	}
 	peer.endpoint.clearSrcOnTx = false
-	peer.endpoint.val = endpoint
+	// In single-socket mode, update both endpoints
+	peer.endpoint.control = endpoint
+	peer.endpoint.data = endpoint
 }
 
 func (peer *Peer) markEndpointSrcForClearing() {
 	peer.endpoint.Lock()
 	defer peer.endpoint.Unlock()
-	if peer.endpoint.val == nil {
+	// Clear src on both endpoints if either is set
+	if peer.endpoint.control == nil && peer.endpoint.data == nil {
 		return
 	}
 	peer.endpoint.clearSrcOnTx = true

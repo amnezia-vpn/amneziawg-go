@@ -89,8 +89,8 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			keyf("private_key", (*[32]byte)(&device.staticIdentity.privateKey))
 		}
 
-		if device.net.port != 0 {
-			sendf("listen_port=%d", device.net.port)
+		if device.net.controlPort != 0 {
+			sendf("listen_port=%d", device.net.controlPort)
 		}
 
 		if device.net.fwmark != 0 {
@@ -155,8 +155,13 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			peer.handshake.mutex.RUnlock()
 			sendf("protocol_version=1")
 			peer.endpoint.Lock()
-			if peer.endpoint.val != nil {
-				sendf("endpoint=%s", peer.endpoint.val.DstToString())
+			// Display data endpoint as primary (or control if data is nil)
+			endpoint := peer.endpoint.data
+			if endpoint == nil {
+				endpoint = peer.endpoint.control
+			}
+			if endpoint != nil {
+				sendf("endpoint=%s", endpoint.DstToString())
 			}
 			peer.endpoint.Unlock()
 
@@ -278,7 +283,9 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		device.log.Verbosef("UAPI: Updating listen port")
 
 		device.net.Lock()
-		device.net.port = uint16(port)
+		// Phase 1: Set both ports to the same value
+		device.net.controlPort = uint16(port)
+		device.net.dataPort = uint16(port)
 		device.net.Unlock()
 
 		if err := device.BindUpdate(); err != nil {
@@ -467,7 +474,7 @@ func (peer *ipcSetPeer) handlePostConfig() {
 		return
 	}
 	if peer.created {
-		peer.endpoint.disableRoaming = peer.device.net.brokenRoaming && peer.endpoint.val != nil
+		peer.endpoint.disableRoaming = peer.device.net.brokenRoaming && (peer.endpoint.data != nil || peer.endpoint.control != nil)
 	}
 	if peer.device.isUp() {
 		peer.Start()
@@ -556,13 +563,15 @@ func (device *Device) handlePeerLine(
 
 	case "endpoint":
 		device.log.Verbosef("%v - UAPI: Updating endpoint", peer.Peer)
-		endpoint, err := device.net.bind.ParseEndpoint(value)
+		endpoint, err := device.net.controlBind.ParseEndpoint(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set endpoint %v: %w", value, err)
 		}
 		peer.endpoint.Lock()
 		defer peer.endpoint.Unlock()
-		peer.endpoint.val = endpoint
+		// Phase 1: Set both endpoints to the same value
+		peer.endpoint.control = endpoint
+		peer.endpoint.data = endpoint
 
 	case "persistent_keepalive_interval":
 		device.log.Verbosef("%v - UAPI: Updating persistent keepalive interval", peer.Peer)
