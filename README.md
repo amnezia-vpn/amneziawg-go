@@ -46,7 +46,7 @@ This runs on Windows, you should use it from [amneziawg-windows](https://github.
 This requires an installation of the latest version of [Go](https://go.dev/).
 
 ```
-$ git clone https://github.com/amnezia-vpn/amneziawg-go
+$ git clone https://github.com/yury-sannikov/amneziawg-go
 $ cd amneziawg-go
 $ make
 ```

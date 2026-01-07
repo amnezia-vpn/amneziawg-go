@@ -10,8 +10,8 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-	"github.com/amnezia-vpn/amneziawg-go/tun/tuntest"
+	"github.com/yury-sannikov/amneziawg-go/conn"
+	"github.com/yury-sannikov/amneziawg-go/tun/tuntest"
 )
 
 func TestCurveWrappers(t *testing.T) {

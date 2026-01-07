@@ -11,7 +11,7 @@ import (
 	"net/netip"
 	"os"
 
-	"github.com/amnezia-vpn/amneziawg-go/tun"
+	"github.com/yury-sannikov/amneziawg-go/tun"
 )
 
 func Ping(dst, src netip.Addr) []byte {

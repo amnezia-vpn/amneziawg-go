@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/Jigsaw-Code/outline-sdk/x/mobileproxy"
-	awg "github.com/amnezia-vpn/amneziawg-go/outline"
+	awg "github.com/yury-sannikov/amneziawg-go/outline"
 )
 
 const cfg = `

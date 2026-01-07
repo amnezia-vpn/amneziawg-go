@@ -1,4 +1,4 @@
-module github.com/amnezia-vpn/amneziawg-go
+module github.com/yury-sannikov/amneziawg-go
 
 go 1.24.4
 

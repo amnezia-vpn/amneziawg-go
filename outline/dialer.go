@@ -7,9 +7,9 @@ import (
 	"net/netip"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/amnezia-vpn/amneziawg-go/conn"
-	"github.com/amnezia-vpn/amneziawg-go/device"
-	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
+	"github.com/yury-sannikov/amneziawg-go/conn"
+	"github.com/yury-sannikov/amneziawg-go/device"
+	"github.com/yury-sannikov/amneziawg-go/tun/netstack"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
