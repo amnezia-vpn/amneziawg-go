@@ -51,10 +51,8 @@ func main() {
 
 	// Create separate binds for control and data
 	// In single-port mode: only controlBind is used
-	// In dual-port mode: both binds are used on different ports
-	controlBind := conn.NewDefaultBind()
-	dataBind := conn.NewDefaultBind()
-	device := device.NewDevice(tun, controlBind, dataBind, logger)
+	// Pass initial bind and a factory for creating data binds on demand (for dual-port mode)
+	device := device.NewDevice(tun, conn.NewDefaultBind(), conn.NewDefaultBind, logger)
 	err = device.Up()
 	if err != nil {
 		logger.Errorf("Failed to bring up device: %v", err)

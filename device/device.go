@@ -41,8 +41,9 @@ type Device struct {
 	net struct {
 		stopping sync.WaitGroup
 		sync.RWMutex
-		controlBind   conn.Bind // bind interface for control (handshake) packets
-		dataBind      conn.Bind // bind interface for data (transport) packets, may equal controlBind in single-port mode
+		controlBind   conn.Bind        // bind interface for control (handshake) packets
+		dataBind      conn.Bind        // bind interface for data (transport) packets, may equal controlBind in single-port mode
+		newDataBind   func() conn.Bind // factory for creating new data binds (for mode switching)
 		netlinkCancel *rwcancel.RWCancel
 		controlPort   uint16 // control listening port
 		dataPort      uint16 // data listening port
@@ -307,13 +308,14 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	return nil
 }
 
-func NewDevice(tunDevice tun.Device, controlBind conn.Bind, dataBind conn.Bind, logger *Logger) *Device {
+func NewDevice(tunDevice tun.Device, bind conn.Bind, newDataBind func() conn.Bind, logger *Logger) *Device {
 	device := new(Device)
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
-	device.net.controlBind = controlBind
-	device.net.dataBind = dataBind
+	device.net.controlBind = bind
+	device.net.dataBind = bind // Start unified (uninitialized state)
+	device.net.newDataBind = newDataBind
 	device.tun.device = tunDevice
 	mtu, err := device.tun.device.MTU()
 	if err != nil {
@@ -470,11 +472,13 @@ func closeBindLocked(device *Device) error {
 	if netc.controlBind != nil {
 		err = netc.controlBind.Close()
 	}
-	// Only close dataBind if it's a different instance (dual-port mode)
+	// Close dataBind if it's a different instance (dual-port mode)
+	// Reset to controlBind so BindUpdate knows to create a new one if needed
 	if netc.dataBind != nil && netc.dataBind != netc.controlBind {
 		if e := netc.dataBind.Close(); e != nil && err == nil {
 			err = e
 		}
+		netc.dataBind = netc.controlBind
 	}
 	netc.stopping.Wait()
 	return err
@@ -539,11 +543,17 @@ func (device *Device) BindUpdate() error {
 	// Determine if dual-port mode based on port settings
 	dualPortMode := (netc.controlPort != netc.dataPort && netc.dataPort != 0)
 
-	// Check if trying to switch from single-port to dual-port mode at runtime
-	// This is not supported because we lose the separate dataBind instance in single-port mode
-	if dualPortMode && netc.dataBind == netc.controlBind {
-		return errors.New("cannot switch to dual-port mode at runtime, restart the tunnel")
+	// Handle mode switching: create/restore dataBind as needed
+	if dualPortMode {
+		// Ensure we have a separate dataBind for dual-port mode
+		if netc.dataBind == netc.controlBind {
+			if netc.newDataBind == nil {
+				return errors.New("no bind factory available for dual-port mode")
+			}
+			netc.dataBind = netc.newDataBind()
+		}
 	}
+	// Note: switching to single-port mode is handled after opening controlBind
 
 	// Open control bind
 	var recvFns []conn.ReceiveFunc
@@ -553,7 +563,7 @@ func (device *Device) BindUpdate() error {
 		return err
 	}
 
-	// Open data bind if dual-port mode
+	// Open data bind if dual-port mode, otherwise unify to control
 	var dataRecvFns []conn.ReceiveFunc
 	if dualPortMode {
 		dataRecvFns, netc.dataPort, err = netc.dataBind.Open(netc.dataPort)
