@@ -128,10 +128,20 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	var sendBuffer [][]byte
 
+	currentCounter := peer.cpsPacketCounter.Load()
+	peer.cpsPacketCounter.Add(1)
+	
 	for _, ipacket := range peer.device.ipackets {
 		if ipacket != nil {
-			buf := make([]byte, ipacket.ObfuscatedLen(0))
-			ipacket.Obfuscate(buf, nil)
+			ipacketWithCounter, err := newObfChainWithCounter(ipacket.Spec, func() uint32 {
+				return currentCounter
+			})
+			if err != nil {
+				peer.device.log.Errorf("%v - Failed to create obfuscation chain with counter: %v", peer, err)
+				continue
+			}
+			buf := make([]byte, ipacketWithCounter.ObfuscatedLen(0))
+			ipacketWithCounter.Obfuscate(buf, nil)
 			sendBuffer = append(sendBuffer, buf)
 		}
 	}
