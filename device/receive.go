@@ -97,13 +97,13 @@ func (device *Device) RoutineReceiveIncoming(
 		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
 	)
 
-	for i := range bufsArrs {
+	for i := range maxBatchSize {
 		bufsArrs[i] = device.GetMessageBuffer()
 		bufs[i] = bufsArrs[i][:]
 	}
 
 	defer func() {
-		for i := 0; i < maxBatchSize; i++ {
+		for i := range maxBatchSize {
 			if bufsArrs[i] != nil {
 				device.PutMessageBuffer(bufsArrs[i])
 			}
@@ -129,7 +129,6 @@ func (device *Device) RoutineReceiveIncoming(
 		}
 		deathSpiral = 0
 
-		device.awg.ASecMux.RLock()
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
 			if size < MinMessageSize {
@@ -138,42 +137,12 @@ func (device *Device) RoutineReceiveIncoming(
 
 			// check size of packet
 			packet := bufsArrs[i][:size]
-			var msgType uint32
-			if device.isAWG() {
-				// TODO:
-				// if awg.WaitResponse.ShouldWait.IsSet() {
-				// 	awg.WaitResponse.Channel <- struct{}{}
-				// }
 
-				if assumedMsgType, ok := packetSizeToMsgType[size]; ok {
-					junkSize := msgTypeToJunkSize[assumedMsgType]
-					// transport size can align with other header types;
-					// making sure we have the right msgType
-					msgType = binary.LittleEndian.Uint32(packet[junkSize : junkSize+4])
-					if msgType == assumedMsgType {
-						packet = packet[junkSize:]
-					} else {
-						device.log.Verbosef("transport packet lined up with another msg type")
-						msgType = binary.LittleEndian.Uint32(packet[:4])
-					}
-				} else {
-					transportJunkSize := device.awg.ASecCfg.TransportHeaderJunkSize
-					msgType = binary.LittleEndian.Uint32(packet[transportJunkSize : transportJunkSize+4])
-					if msgType != MessageTransportType {
-						// probably a junk packet
-						device.log.Verbosef("aSec: Received message with unknown type: %d", msgType)
-						continue
-					}
-
-					// remove junk from bufsArrs by shifting the packet
-					// this buffer is also used for decryption, so it needs to be corrected
-					copy(bufsArrs[i][:size], packet[transportJunkSize:])
-					size -= transportJunkSize
-					// need to reinitialize packet as well
-					packet = packet[:size]
-				}
-			} else {
-				msgType = binary.LittleEndian.Uint32(packet[:4])
+			// get message padding and type based on information from S1-S4 and H1-H4
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
+			if padding > 0 {
+				copy(packet, packet[padding:])
+				packet = packet[:len(packet)-padding]
 			}
 
 			switch msgType {
@@ -259,7 +228,6 @@ func (device *Device) RoutineReceiveIncoming(
 			default:
 			}
 		}
-		device.awg.ASecMux.RUnlock()
 		for peer, elemsContainer := range elemsByPeer {
 			if peer.isRunning.Load() {
 				peer.queue.inbound.c <- elemsContainer
@@ -317,9 +285,6 @@ func (device *Device) RoutineHandshake(id int) {
 	device.log.Verbosef("Routine: handshake worker %d - started", id)
 
 	for elem := range device.queue.handshake.c {
-
-		device.awg.ASecMux.RLock()
-
 		// handle cookie fields and ratelimiting
 
 		switch elem.msgType {
@@ -405,6 +370,9 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
+			// have to reassign msgType for ranged msgType to work
+			msg.Type = elem.msgType
+
 			// consume initiation
 			peer := device.ConsumeMessageInitiation(&msg)
 			if peer == nil {
@@ -436,6 +404,9 @@ func (device *Device) RoutineHandshake(id int) {
 				device.log.Errorf("Failed to decode response message")
 				goto skip
 			}
+
+			// have to reassign msgType for ranged msgType to work
+			msg.Type = elem.msgType
 
 			// consume response
 
@@ -470,7 +441,6 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.SendKeepalive()
 		}
 	skip:
-		device.awg.ASecMux.RUnlock()
 		device.PutMessageBuffer(elem.buffer)
 	}
 }
@@ -588,4 +558,58 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 		bufs = bufs[:0]
 		device.PutInboundElementsContainer(elemsContainer)
 	}
+}
+
+func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32) (uint32, int) {
+	size := len(packet)
+
+	if expectedType == MessageUnknownType || expectedType == MessageInitiationType {
+		padding := device.paddings.init
+		header := device.headers.init
+
+		if size == padding+MessageInitiationSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageInitiationType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageResponseType {
+		padding := device.paddings.response
+		header := device.headers.response
+
+		if size == padding+MessageResponseSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageResponseType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageCookieReplyType {
+		padding := device.paddings.cookie
+		header := device.headers.cookie
+
+		if size == padding+MessageCookieReplySize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageCookieReplyType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageTransportType {
+		padding := device.paddings.transport
+		header := device.headers.transport
+
+		if size >= padding+MessageTransportHeaderSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageTransportType, padding
+			}
+		}
+	}
+
+	return MessageUnknownType, 0
 }

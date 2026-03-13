@@ -6,7 +6,7 @@ RUN go mod download && \
     go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /usr/bin
 
 FROM alpine:3.19
-ARG AWGTOOLS_RELEASE="1.0.20241018"
+ARG AWGTOOLS_RELEASE="1.0.20250901"
 
 RUN apk --no-cache add iproute2 iptables bash && \
     cd /usr/bin/ && \
