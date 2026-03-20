@@ -296,6 +296,9 @@ type FramedUDPConn struct {
 
 func (c *FramedUDPConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net.UDPAddr, err error) {
 	n, oobn, flags, addr, err = c.UDPConn.ReadMsgUDP(b, oob)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
 	n = c.enc.Decode(b[:n])
 	return n, oobn, flags, addr, err
 }
