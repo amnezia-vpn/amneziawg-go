@@ -18,6 +18,15 @@ type PreludeOpts struct {
 	RulesArr [5]Rules
 }
 
+func (o PreludeOpts) IsEmpty() bool {
+	for _, rules := range o.RulesArr {
+		if rules != nil {
+			return false
+		}
+	}
+	return o.Jc == 0
+}
+
 func newJunkGenerator(min, max int) *junkGenerator {
 	return &junkGenerator{
 		rang:   big.NewInt(int64(max - min + 1)),
@@ -46,15 +55,7 @@ func NewPreludeUDPConn(
 	header *RangedHeader,
 	opts PreludeOpts,
 ) (c *PreludeUDPConn, ok bool) {
-	empty := true
-	for _, rules := range opts.RulesArr {
-		if rules != nil {
-			empty = false
-			break
-		}
-	}
-
-	if empty && opts.Jc == 0 && opts.Jmin == 0 && opts.Jmax == 0 {
+	if opts.IsEmpty() {
 		return nil, false
 	}
 
@@ -129,6 +130,89 @@ func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn 
 	return c.UDPConn.WriteMsgUDP(b, oob, addr)
 }
 
+func newStreamPreludeHeader(opts FramedOpts) *RangedHeader {
+	if opts.H1 != nil {
+		return opts.H1
+	}
+	return &RangedHeader{
+		start: WireguardMsgInitiationType,
+		end:   WireguardMsgInitiationType,
+	}
+}
+
+func NewPreludeConn(
+	conn net.Conn,
+	pool *sync.Pool,
+	framedOpts FramedOpts,
+	opts PreludeOpts,
+) (c *PreludeConn, ok bool) {
+	if opts.IsEmpty() {
+		return nil, false
+	}
+
+	if opts.Jmin > opts.Jmax {
+		opts.Jmin, opts.Jmax = opts.Jmax, opts.Jmin
+	}
+
+	return &PreludeConn{
+		Conn:      conn,
+		pool:      WrapBufferPool(pool),
+		rulesArr:  opts.RulesArr,
+		junkCount: opts.Jc,
+		junkGen:   newJunkGenerator(opts.Jmin, opts.Jmax),
+		header:    newStreamPreludeHeader(framedOpts),
+	}, true
+}
+
+type PreludeConn struct {
+	net.Conn
+	pool      *BufferPool
+	rulesArr  [5]Rules
+	junkCount int
+	junkGen   *junkGenerator
+	header    *RangedHeader
+}
+
+func (c *PreludeConn) Write(b []byte) (n int, err error) {
+	var isInit bool
+	if len(b) >= 4 {
+		isInit = c.header.Validate(binary.LittleEndian.Uint32(b[:4]))
+	}
+
+	if isInit {
+		buf := c.pool.Get()
+		defer c.pool.Put(buf)
+
+		ctx := &writeContext{
+			FlexBuffer: WrapFlexBuffer(nil),
+			BufferPool: c.pool,
+		}
+
+		for _, rules := range c.rulesArr {
+			if rules == nil {
+				continue
+			}
+
+			w := bytes.NewBuffer(buf[:0])
+			if err = rules.Write(w, ctx); err != nil {
+				return 0, err
+			}
+
+			if _, err = c.Conn.Write(w.Bytes()); err != nil {
+				return 0, err
+			}
+		}
+
+		for range c.junkCount {
+			if _, err = c.Conn.Write(c.junkGen.generate(buf)); err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	return c.Conn.Write(b)
+}
+
 func NewPreludeBatchConn(
 	conn BatchConn,
 	origin BatchConn,
@@ -137,14 +221,7 @@ func NewPreludeBatchConn(
 	header *RangedHeader,
 	opts PreludeOpts,
 ) (c *PreludeBatchConn, ok bool) {
-	empty := true
-	for _, rules := range opts.RulesArr {
-		if rules != nil {
-			empty = false
-		}
-	}
-
-	if empty && opts.Jc == 0 {
+	if opts.IsEmpty() {
 		return nil, false
 	}
 

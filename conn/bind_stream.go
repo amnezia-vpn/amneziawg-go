@@ -15,6 +15,7 @@ import (
 var (
 	_ Bind          = (*BindStream)(nil)
 	_ Framable      = (*BindStream)(nil)
+	_ Preludable    = (*BindStream)(nil)
 	_ Masqueradable = (*BindStream)(nil)
 )
 
