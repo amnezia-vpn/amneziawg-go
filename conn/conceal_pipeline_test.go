@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +28,39 @@ func TestStdNetBindUDPPipelineOrder(t *testing.T) {
 	want := []string{"masquerade", "framed", "prelude"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("udp pipeline = %v, want %v", got, want)
+	}
+}
+
+func TestStdNetBindUDPPreludeStillEmitsJunk(t *testing.T) {
+	bind := NewStdNetBind().(*StdNetBind)
+	bind.SetPreludeOpts(conceal.PreludeOpts{
+		Jc:   1,
+		Jmin: 3,
+		Jmax: 3,
+		RulesArr: [5]conceal.Rules{
+			mustParseRules(t, "<b 0xaabb>"),
+		},
+	})
+
+	conn := &recordingUDPConn{}
+	upgraded := bind.upgradeUDPConn(conn)
+	initiation := makeInitiationPacket()
+
+	if _, _, err := upgraded.WriteMsgUDP(initiation, nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 51820}); err != nil {
+		t.Fatalf("udp write failed: %v", err)
+	}
+
+	if len(conn.writes) != 3 {
+		t.Fatalf("udp write count = %d, want 3", len(conn.writes))
+	}
+	if !bytes.Equal(conn.writes[0], []byte{0xaa, 0xbb}) {
+		t.Fatalf("udp decoy record = %x, want aabb", conn.writes[0])
+	}
+	if len(conn.writes[1]) != 3 {
+		t.Fatalf("udp junk length = %d, want 3", len(conn.writes[1]))
+	}
+	if !bytes.Equal(conn.writes[2], initiation) {
+		t.Fatalf("udp initiation payload changed")
 	}
 }
 
@@ -57,6 +91,26 @@ func TestBindStreamPipelineOmitsPreludeWithoutBidirectionalRecords(t *testing.T)
 	}
 }
 
+func TestBindStreamPipelineOmitsPreludeForTCPJunkOnlyConfig(t *testing.T) {
+	bind := NewBindStream()
+	bind.SetMasqueradeOpts(conceal.MasqueradeOpts{
+		RulesIn:  mustParseRules(t, "<dz be 2><d>"),
+		RulesOut: mustParseRules(t, "<dz be 2><d>"),
+	})
+	bind.SetFramedOpts(conceal.FramedOpts{H1: mustHeader(t, "777")})
+	bind.SetPreludeOpts(conceal.PreludeOpts{
+		Jc:   1,
+		Jmin: 2,
+		Jmax: 2,
+	})
+
+	got := bind.streamConcealPipeline().names()
+	want := []string{"record", "framed"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("stream pipeline with tcp junk only = %v, want %v", got, want)
+	}
+}
+
 func TestBindStreamTCPPreludeInjectsBeforeEveryInitiation(t *testing.T) {
 	senderRaw, receiverRaw := net.Pipe()
 	defer senderRaw.Close()
@@ -81,11 +135,6 @@ func TestBindStreamTCPPreludeInjectsBeforeEveryInitiation(t *testing.T) {
 		t.Fatalf("prelude record = %x, want aabb", prelude)
 	}
 
-	junk := readRecord(t, receiver, 16)
-	if len(junk) != 2 {
-		t.Fatalf("junk record length = %d, want 2", len(junk))
-	}
-
 	firstInit := readRecord(t, receiver, len(initiation))
 	if gotHeader := binary.LittleEndian.Uint32(firstInit[:4]); gotHeader != 777 {
 		t.Fatalf("first initiation header = %d, want 777", gotHeader)
@@ -104,11 +153,6 @@ func TestBindStreamTCPPreludeInjectsBeforeEveryInitiation(t *testing.T) {
 	secondPrelude := readRecord(t, receiver, 16)
 	if !bytes.Equal(secondPrelude, []byte{0xaa, 0xbb}) {
 		t.Fatalf("second prelude record = %x, want aabb", secondPrelude)
-	}
-
-	secondJunk := readRecord(t, receiver, 16)
-	if len(secondJunk) != 2 {
-		t.Fatalf("second junk record length = %d, want 2", len(secondJunk))
 	}
 
 	secondInit := readRecord(t, receiver, len(initiation))
@@ -362,4 +406,50 @@ func readRecord(t *testing.T, conn interface{ ReadRecord([]byte) (int, error) },
 		t.Fatalf("read record: %v", err)
 	}
 	return slices.Clone(buf[:n])
+}
+
+type recordingUDPConn struct {
+	writes [][]byte
+}
+
+func (c *recordingUDPConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	return 0, nil, net.ErrClosed
+}
+
+func (c *recordingUDPConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	c.writes = append(c.writes, bytes.Clone(p))
+	return len(p), nil
+}
+
+func (c *recordingUDPConn) Close() error {
+	return nil
+}
+
+func (c *recordingUDPConn) LocalAddr() net.Addr {
+	return &net.UDPAddr{}
+}
+
+func (c *recordingUDPConn) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *recordingUDPConn) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *recordingUDPConn) SetWriteDeadline(t time.Time) error {
+	return nil
+}
+
+func (c *recordingUDPConn) SyscallConn() (syscall.RawConn, error) {
+	return nil, nil
+}
+
+func (c *recordingUDPConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net.UDPAddr, err error) {
+	return 0, 0, 0, nil, net.ErrClosed
+}
+
+func (c *recordingUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
+	c.writes = append(c.writes, bytes.Clone(b))
+	return len(b), len(oob), nil
 }

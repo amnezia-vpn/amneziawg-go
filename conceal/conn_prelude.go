@@ -18,11 +18,18 @@ type PreludeOpts struct {
 	RulesArr [5]Rules
 }
 
-func (o PreludeOpts) IsEmpty() bool {
+func (o PreludeOpts) HasDecoyRules() bool {
 	for _, rules := range o.RulesArr {
 		if rules != nil {
-			return false
+			return true
 		}
+	}
+	return false
+}
+
+func (o PreludeOpts) IsEmpty() bool {
+	if o.HasDecoyRules() {
+		return false
 	}
 	return o.Jc == 0
 }
@@ -136,12 +143,8 @@ func NewPreludeConn(
 	framedOpts FramedOpts,
 	opts PreludeOpts,
 ) (c *PreludeConn, ok bool) {
-	if opts.IsEmpty() || !conn.CanReadRecord() || !conn.CanWriteRecord() {
+	if !opts.HasDecoyRules() || !conn.CanReadRecord() || !conn.CanWriteRecord() {
 		return nil, false
-	}
-
-	if opts.Jmin > opts.Jmax {
-		opts.Jmin, opts.Jmax = opts.Jmax, opts.Jmin
 	}
 
 	enc, _ := newFrameEncoding(framedOpts)
@@ -150,8 +153,6 @@ func NewPreludeConn(
 		StreamRecordConn: conn,
 		pool:             WrapBufferPool(pool),
 		rulesArr:         opts.RulesArr,
-		junkCount:        opts.Jc,
-		junkGen:          newJunkGenerator(opts.Jmin, opts.Jmax),
 		recordEncoding:   enc,
 	}, true
 }
@@ -160,8 +161,6 @@ type PreludeConn struct {
 	StreamRecordConn
 	pool           *BufferPool
 	rulesArr       [5]Rules
-	junkCount      int
-	junkGen        *junkGenerator
 	recordEncoding frameEncoding
 	seenValid      bool
 }
@@ -213,12 +212,6 @@ func (c *PreludeConn) writePreludeRecords() (err error) {
 		}
 
 		if _, err = c.StreamRecordConn.WriteRecord(w.Bytes()); err != nil {
-			return err
-		}
-	}
-
-	for range c.junkCount {
-		if _, err = c.StreamRecordConn.WriteRecord(c.junkGen.generate(buf)); err != nil {
 			return err
 		}
 	}

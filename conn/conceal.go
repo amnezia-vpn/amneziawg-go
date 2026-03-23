@@ -82,7 +82,7 @@ func (b *BindStream) streamConcealPipeline() concealPipeline {
 	if hasMasquerade(b.masqueradeOpts) {
 		stages = append(stages, concealStageRecord)
 	}
-	if !b.preludeOpts.IsEmpty() && hasBidirectionalStreamRecords(b.masqueradeOpts) {
+	if b.preludeOpts.HasDecoyRules() && hasBidirectionalStreamRecords(b.masqueradeOpts) {
 		stages = append(stages, concealStagePrelude)
 	}
 	if hasFramed(b.framedOpts) {
