@@ -33,9 +33,19 @@ type MasqueradeConn struct {
 	pool     *BufferPool
 }
 
-func (c *MasqueradeConn) Read(b []byte) (n int, err error) {
-	if c.rulesIn == nil {
-		return c.Conn.Read(b)
+var _ StreamRecordConn = (*MasqueradeConn)(nil)
+
+func (c *MasqueradeConn) CanReadRecord() bool {
+	return c.rulesIn != nil
+}
+
+func (c *MasqueradeConn) CanWriteRecord() bool {
+	return c.rulesOut != nil
+}
+
+func (c *MasqueradeConn) ReadRecord(b []byte) (n int, err error) {
+	if !c.CanReadRecord() {
+		return 0, ErrNoReadRecord
 	}
 
 	ctx := &readContext{
@@ -50,9 +60,9 @@ func (c *MasqueradeConn) Read(b []byte) (n int, err error) {
 	return ctx.Len(), nil
 }
 
-func (c *MasqueradeConn) Write(b []byte) (n int, err error) {
-	if c.rulesOut == nil {
-		return c.Conn.Write(b)
+func (c *MasqueradeConn) WriteRecord(b []byte) (n int, err error) {
+	if !c.CanWriteRecord() {
+		return 0, ErrNoWriteRecord
 	}
 
 	ctx := &writeContext{
@@ -74,6 +84,20 @@ func (c *MasqueradeConn) Write(b []byte) (n int, err error) {
 	}
 
 	return ctx.Len(), nil
+}
+
+func (c *MasqueradeConn) Read(b []byte) (n int, err error) {
+	if !c.CanReadRecord() {
+		return c.Conn.Read(b)
+	}
+	return c.ReadRecord(b)
+}
+
+func (c *MasqueradeConn) Write(b []byte) (n int, err error) {
+	if !c.CanWriteRecord() {
+		return c.Conn.Write(b)
+	}
+	return c.WriteRecord(b)
 }
 
 func NewMasqueradeUDPConn(conn UDPConn, pool *sync.Pool, opts MasqueradeOpts) (c *MasqueradeUDPConn, ok bool) {

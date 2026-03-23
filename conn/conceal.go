@@ -22,6 +22,7 @@ type concealStage string
 
 const (
 	concealStageMasquerade concealStage = "masquerade"
+	concealStageRecord     concealStage = "record"
 	concealStageFramed     concealStage = "framed"
 	concealStagePrelude    concealStage = "prelude"
 )
@@ -45,6 +46,10 @@ func hasFramed(opts conceal.FramedOpts) bool {
 
 func hasMasquerade(opts conceal.MasqueradeOpts) bool {
 	return opts.RulesIn != nil || opts.RulesOut != nil
+}
+
+func hasBidirectionalStreamRecords(opts conceal.MasqueradeOpts) bool {
+	return opts.RulesIn != nil && opts.RulesOut != nil
 }
 
 func udpPreludeHeader(opts conceal.FramedOpts) *conceal.RangedHeader {
@@ -75,9 +80,9 @@ func (b *StdNetBind) batchConcealPipeline() concealPipeline {
 func (b *BindStream) streamConcealPipeline() concealPipeline {
 	stages := make([]concealStage, 0, 3)
 	if hasMasquerade(b.masqueradeOpts) {
-		stages = append(stages, concealStageMasquerade)
+		stages = append(stages, concealStageRecord)
 	}
-	if !b.preludeOpts.IsEmpty() && b.masqueradeOpts.RulesOut != nil {
+	if !b.preludeOpts.IsEmpty() && hasBidirectionalStreamRecords(b.masqueradeOpts) {
 		stages = append(stages, concealStagePrelude)
 	}
 	if hasFramed(b.framedOpts) {
@@ -141,14 +146,16 @@ func (b *StdNetBind) SetMasqueradeOpts(opts conceal.MasqueradeOpts) {
 }
 
 func (b *BindStream) upgradeConn(conn net.Conn) net.Conn {
+	var recordConn conceal.StreamRecordConn
 	for _, stage := range b.streamConcealPipeline().stages {
 		switch stage {
-		case concealStageMasquerade:
+		case concealStageRecord:
 			if masquerade, ok := conceal.NewMasqueradeConn(conn, &b.bufferPool, b.masqueradeOpts); ok {
+				recordConn = masquerade
 				conn = masquerade
 			}
 		case concealStagePrelude:
-			if prelude, ok := conceal.NewPreludeConn(conn, &b.bufferPool, b.framedOpts, b.preludeOpts); ok {
+			if prelude, ok := conceal.NewPreludeConn(recordConn, &b.bufferPool, b.framedOpts, b.preludeOpts); ok {
 				conn = prelude
 			}
 		case concealStageFramed:

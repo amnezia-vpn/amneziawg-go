@@ -116,6 +116,16 @@ type frameEncoding struct {
 	compat bool
 }
 
+type frameRecordKind uint8
+
+const (
+	frameRecordInvalid frameRecordKind = iota
+	frameRecordInitiation
+	frameRecordResponse
+	frameRecordCookie
+	frameRecordTransport
+)
+
 func encodeOne(dst, src []byte, header RangedHeader, padding int) int {
 	rand.Read(dst[:padding])
 	dst = dst[padding:]
@@ -187,56 +197,75 @@ func decodeOne(b []byte, header RangedHeader, padding int, originalHeader uint32
 	return 4 + n
 }
 
+func (e *frameEncoding) matchesRecord(b []byte, header RangedHeader, padding, size int) bool {
+	if len(b) != size {
+		return false
+	}
+	if len(b) < padding+4 {
+		return false
+	}
+	return header.Validate(binary.LittleEndian.Uint32(b[padding : padding+4]))
+}
+
+func (e *frameEncoding) matchesTransportRecord(b []byte) bool {
+	if len(b) < WireguardMsgTransportMinSize+e.padding.transport {
+		return false
+	}
+	if len(b) < e.padding.transport+4 {
+		return false
+	}
+	return e.header.transport.Validate(binary.LittleEndian.Uint32(b[e.padding.transport : e.padding.transport+4]))
+}
+
+func (e *frameEncoding) recordKind(b []byte) frameRecordKind {
+	if e.matchesRecord(b, e.header.initial, e.padding.initial, WireguardMsgInitiationSize+e.padding.initial) {
+		return frameRecordInitiation
+	}
+	if e.matchesRecord(b, e.header.response, e.padding.response, WireguardMsgResponseSize+e.padding.response) {
+		return frameRecordResponse
+	}
+	if e.matchesRecord(b, e.header.cookie, e.padding.cookie, WireguardMsgCookieReplySize+e.padding.cookie) {
+		return frameRecordCookie
+	}
+	if e.matchesTransportRecord(b) {
+		return frameRecordTransport
+	}
+	return frameRecordInvalid
+}
+
+func (e *frameEncoding) IsValidRecord(b []byte) bool {
+	return e.recordKind(b) != frameRecordInvalid
+}
+
+func (e *frameEncoding) IsInitiationRecord(b []byte) bool {
+	return e.recordKind(b) == frameRecordInitiation
+}
+
 func (e *frameEncoding) Decode(b []byte) int {
-	if len(b) == WireguardMsgInitiationSize+e.padding.initial {
+	switch e.recordKind(b) {
+	case frameRecordInitiation:
 		if e.compat {
-			if n := decodeOneCompat(b, e.header.initial, e.padding.initial); n != 0 {
-				return n
-			}
-		} else {
-			if n := decodeOne(b, e.header.initial, e.padding.initial, WireguardMsgInitiationType); n != 0 {
-				return n
-			}
+			return decodeOneCompat(b, e.header.initial, e.padding.initial)
 		}
-	}
-
-	if len(b) == WireguardMsgResponseSize+e.padding.response {
+		return decodeOne(b, e.header.initial, e.padding.initial, WireguardMsgInitiationType)
+	case frameRecordResponse:
 		if e.compat {
-			if n := decodeOneCompat(b, e.header.response, e.padding.response); n != 0 {
-				return n
-			}
-		} else {
-			if n := decodeOne(b, e.header.response, e.padding.response, WireguardMsgResponseType); n != 0 {
-				return n
-			}
+			return decodeOneCompat(b, e.header.response, e.padding.response)
 		}
-	}
-
-	if len(b) == WireguardMsgCookieReplySize+e.padding.cookie {
+		return decodeOne(b, e.header.response, e.padding.response, WireguardMsgResponseType)
+	case frameRecordCookie:
 		if e.compat {
-			if n := decodeOneCompat(b, e.header.cookie, e.padding.cookie); n != 0 {
-				return n
-			}
-		} else {
-			if n := decodeOne(b, e.header.cookie, e.padding.cookie, WireguardMsgCookieReplyType); n != 0 {
-				return n
-			}
+			return decodeOneCompat(b, e.header.cookie, e.padding.cookie)
 		}
-	}
-
-	if len(b) >= WireguardMsgTransportMinSize+e.padding.transport {
+		return decodeOne(b, e.header.cookie, e.padding.cookie, WireguardMsgCookieReplyType)
+	case frameRecordTransport:
 		if e.compat {
-			if n := decodeOneCompat(b, e.header.transport, e.padding.transport); n != 0 {
-				return n
-			}
-		} else {
-			if n := decodeOne(b, e.header.transport, e.padding.transport, WireguardMsgTransportType); n != 0 {
-				return n
-			}
+			return decodeOneCompat(b, e.header.transport, e.padding.transport)
 		}
+		return decodeOne(b, e.header.transport, e.padding.transport, WireguardMsgTransportType)
+	default:
+		return len(b)
 	}
-
-	return len(b)
 }
 
 func NewFramedConn(conn net.Conn, pool *sync.Pool, opts FramedOpts) (c *FramedConn, ok bool) {

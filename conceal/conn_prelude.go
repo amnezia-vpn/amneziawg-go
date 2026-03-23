@@ -130,23 +130,13 @@ func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn 
 	return c.UDPConn.WriteMsgUDP(b, oob, addr)
 }
 
-func newStreamPreludeHeader(opts FramedOpts) *RangedHeader {
-	if opts.H1 != nil {
-		return opts.H1
-	}
-	return &RangedHeader{
-		start: WireguardMsgInitiationType,
-		end:   WireguardMsgInitiationType,
-	}
-}
-
 func NewPreludeConn(
-	conn net.Conn,
+	conn StreamRecordConn,
 	pool *sync.Pool,
 	framedOpts FramedOpts,
 	opts PreludeOpts,
 ) (c *PreludeConn, ok bool) {
-	if opts.IsEmpty() {
+	if opts.IsEmpty() || !conn.CanReadRecord() || !conn.CanWriteRecord() {
 		return nil, false
 	}
 
@@ -154,63 +144,86 @@ func NewPreludeConn(
 		opts.Jmin, opts.Jmax = opts.Jmax, opts.Jmin
 	}
 
+	enc, _ := newFrameEncoding(framedOpts)
+
 	return &PreludeConn{
-		Conn:      conn,
-		pool:      WrapBufferPool(pool),
-		rulesArr:  opts.RulesArr,
-		junkCount: opts.Jc,
-		junkGen:   newJunkGenerator(opts.Jmin, opts.Jmax),
-		header:    newStreamPreludeHeader(framedOpts),
+		StreamRecordConn: conn,
+		pool:             WrapBufferPool(pool),
+		rulesArr:         opts.RulesArr,
+		junkCount:        opts.Jc,
+		junkGen:          newJunkGenerator(opts.Jmin, opts.Jmax),
+		recordEncoding:   enc,
 	}, true
 }
 
 type PreludeConn struct {
-	net.Conn
-	pool      *BufferPool
-	rulesArr  [5]Rules
-	junkCount int
-	junkGen   *junkGenerator
-	header    *RangedHeader
+	StreamRecordConn
+	pool           *BufferPool
+	rulesArr       [5]Rules
+	junkCount      int
+	junkGen        *junkGenerator
+	recordEncoding frameEncoding
+	seenValid      bool
+}
+
+func (c *PreludeConn) Read(b []byte) (n int, err error) {
+	if c.seenValid {
+		return c.StreamRecordConn.ReadRecord(b)
+	}
+
+	for {
+		n, err = c.StreamRecordConn.ReadRecord(b)
+		if err != nil {
+			return 0, err
+		}
+		if c.recordEncoding.IsValidRecord(b[:n]) {
+			c.seenValid = true
+			return n, nil
+		}
+	}
 }
 
 func (c *PreludeConn) Write(b []byte) (n int, err error) {
-	var isInit bool
-	if len(b) >= 4 {
-		isInit = c.header.Validate(binary.LittleEndian.Uint32(b[:4]))
-	}
-
-	if isInit {
-		buf := c.pool.Get()
-		defer c.pool.Put(buf)
-
-		ctx := &writeContext{
-			FlexBuffer: WrapFlexBuffer(nil),
-			BufferPool: c.pool,
-		}
-
-		for _, rules := range c.rulesArr {
-			if rules == nil {
-				continue
-			}
-
-			w := bytes.NewBuffer(buf[:0])
-			if err = rules.Write(w, ctx); err != nil {
-				return 0, err
-			}
-
-			if _, err = c.Conn.Write(w.Bytes()); err != nil {
-				return 0, err
-			}
-		}
-
-		for range c.junkCount {
-			if _, err = c.Conn.Write(c.junkGen.generate(buf)); err != nil {
-				return 0, err
-			}
+	if c.recordEncoding.IsInitiationRecord(b) {
+		if err := c.writePreludeRecords(); err != nil {
+			return 0, err
 		}
 	}
 
-	return c.Conn.Write(b)
+	return c.StreamRecordConn.WriteRecord(b)
+}
+
+func (c *PreludeConn) writePreludeRecords() (err error) {
+	buf := c.pool.Get()
+	defer c.pool.Put(buf)
+
+	ctx := &writeContext{
+		FlexBuffer: WrapFlexBuffer(nil),
+		BufferPool: c.pool,
+	}
+
+	for _, rules := range c.rulesArr {
+		if rules == nil {
+			continue
+		}
+
+		w := bytes.NewBuffer(buf[:0])
+		if err = rules.Write(w, ctx); err != nil {
+			return err
+		}
+
+		if _, err = c.StreamRecordConn.WriteRecord(w.Bytes()); err != nil {
+			return err
+		}
+	}
+
+	for range c.junkCount {
+		if _, err = c.StreamRecordConn.WriteRecord(c.junkGen.generate(buf)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func NewPreludeBatchConn(
