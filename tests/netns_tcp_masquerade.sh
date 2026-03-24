@@ -3,12 +3,13 @@
 set -euo pipefail
 
 # This script exercises TCP outer transport with all active TCP conceal layers.
-# It is Linux-only and expects amneziawg-tools to already be installed as `wg`.
+# It is Linux-only. AWG-specific options are configured through raw UAPI, so the
+# local `wg` binary is only needed for key generation helpers.
 #
 # Usage:
 #   ./netns_tcp_masquerade.sh <path to amneziawg-go> [shared-interface-fragment]
 #
-# The optional fragment file should contain only shared [Interface] keys, e.g.
+# The optional fragment file should contain only shared interface keys, e.g.
 # Network / FormatIn / FormatOut / I1 / I2 / H1-H4 / S1-S4.
 #
 # The script verifies:
@@ -116,6 +117,118 @@ H4 = ${H4}
 EOF
 }
 
+render_shared_uapi() {
+	if [[ -z $shared_fragment ]]; then
+		cat <<EOF
+network=tcp
+header_compat=${HEADER_COMPAT}
+format_in=${FORMAT_IN}
+format_out=${FORMAT_OUT}
+i1=${I1_RULES}
+i2=${I2_RULES}
+s1=${S1}
+s2=${S2}
+s3=${S3}
+s4=${S4}
+h1=${H1}
+h2=${H2}
+h3=${H3}
+h4=${H4}
+EOF
+		return
+	fi
+
+	awk '
+		function trim(s) {
+			gsub(/^[ \t]+|[ \t]+$/, "", s)
+			return s
+		}
+		BEGIN {
+			map["Network"] = "network"
+			map["FormatIn"] = "format_in"
+			map["FormatOut"] = "format_out"
+			map["HeaderCompat"] = "header_compat"
+			map["I1"] = "i1"
+			map["I2"] = "i2"
+			map["I3"] = "i3"
+			map["I4"] = "i4"
+			map["I5"] = "i5"
+			map["Jc"] = "jc"
+			map["Jmin"] = "jmin"
+			map["Jmax"] = "jmax"
+			map["S1"] = "s1"
+			map["S2"] = "s2"
+			map["S3"] = "s3"
+			map["S4"] = "s4"
+			map["H1"] = "h1"
+			map["H2"] = "h2"
+			map["H3"] = "h3"
+			map["H4"] = "h4"
+		}
+		/^[ \t]*(#|;|$)/ { next }
+		/^[ \t]*\[/ { next }
+		{
+			line = $0
+			sub(/\r$/, "", line)
+			split(line, parts, "=")
+			if (length(parts) < 2) {
+				next
+			}
+			key = trim(parts[1])
+			sub(/^[^=]*=/, "", line)
+			value = trim(line)
+			if (key in map) {
+				printf "%s=%s\n", map[key], value
+			}
+		}
+	' "$shared_fragment"
+}
+
+uapi_set() {
+	local iface=$1
+	local payload=$2
+	local output
+	output="$(
+		printf 'set=1\n%s\n' "$payload" |
+			ip netns exec "$netns0" socat - "UNIX-CONNECT:/var/run/amneziawg/${iface}.sock"
+	)"
+	if [[ "$output" != *"errno=0"* ]]; then
+		echo "uapi set failed for $iface" >&2
+		echo "$output" >&2
+		return 1
+	fi
+}
+
+render_base_uapi() {
+	local private_key=$1
+	local listen_port=$2
+	local peer_pub=$3
+	local psk=$4
+	local allowed_ip=$5
+
+	cat <<EOF
+private_key=${private_key}
+listen_port=${listen_port}
+$(render_shared_uapi)
+replace_peers=true
+public_key=${peer_pub}
+preshared_key=${psk}
+protocol_version=1
+replace_allowed_ips=true
+allowed_ip=${allowed_ip}
+EOF
+}
+
+render_endpoint_uapi() {
+	local peer_pub=$1
+	local endpoint=$2
+
+	cat <<EOF
+public_key=${peer_pub}
+endpoint=${endpoint}
+EOF
+}
+
 cleanup() {
 	set +e
 	exec 2>/dev/null
@@ -191,33 +304,15 @@ ip2 addr add 192.168.241.2/24 dev wg2
 
 cfg1="$tmpdir/wg1.conf"
 cfg2="$tmpdir/wg2.conf"
-
 cat >"$cfg1" <<EOF
-[Interface]
-PrivateKey = ${key1}
-ListenPort = ${OUTER_PORT1}
-$(render_shared_interface)
-
-[Peer]
-PublicKey = ${pub2}
-PresharedKey = ${psk}
-AllowedIPs = 192.168.241.2/32
+$(render_base_uapi "$key1" "$OUTER_PORT1" "$pub2" "$psk" "192.168.241.2/32")
 EOF
-
 cat >"$cfg2" <<EOF
-[Interface]
-PrivateKey = ${key2}
-ListenPort = ${OUTER_PORT2}
-$(render_shared_interface)
-
-[Peer]
-PublicKey = ${pub1}
-PresharedKey = ${psk}
-AllowedIPs = 192.168.241.1/32
+$(render_base_uapi "$key2" "$OUTER_PORT2" "$pub1" "$psk" "192.168.241.1/32")
 EOF
 
-n0 wg setconf wg1 "$cfg1"
-n0 wg setconf wg2 "$cfg2"
+uapi_set wg1 "$(cat "$cfg1")"
+uapi_set wg2 "$(cat "$cfg2")"
 
 ip1 link set up dev wg1
 ip2 link set up dev wg2
@@ -227,10 +322,8 @@ wait_listener "$netns0" "$OUTER_PORT2" "outer tcp listen"
 
 # Endpoint parsing must happen after the interface is up, otherwise it is still
 # interpreted by the default UDP bind.
-n0 wg set wg1 peer "$pub2" endpoint "127.0.0.1:${OUTER_PORT2}"
-n0 wg set wg2 peer "$pub1" endpoint "127.0.0.1:${OUTER_PORT1}"
-n0 wg showconf wg1
-n0 wg showconf wg2
+uapi_set wg1 "$(render_endpoint_uapi "$pub2" "127.0.0.1:${OUTER_PORT2}")"
+uapi_set wg2 "$(render_endpoint_uapi "$pub1" "127.0.0.1:${OUTER_PORT1}")"
 
 pretty 0 "capture outer tcp stream"
 ip netns exec "$netns0" tcpdump -i lo -nn -s 0 -l -XX "tcp port ${OUTER_PORT1} or tcp port ${OUTER_PORT2}" >"$capture_file" 2>&1 &
