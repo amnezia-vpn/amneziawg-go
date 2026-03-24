@@ -73,6 +73,10 @@ require_cmd() {
 	}
 }
 
+b64_to_hex() {
+	printf '%s' "$1" | base64 -d | xxd -p -c 256
+}
+
 wait_file() {
 	local ns=$1
 	local path=$2
@@ -260,6 +264,8 @@ trap cleanup EXIT
 require_cmd ip
 require_cmd ss
 require_cmd wg
+require_cmd base64
+require_cmd xxd
 require_cmd socat
 require_cmd tcpdump
 
@@ -293,11 +299,17 @@ n0 "$program" wg2
 wait_file "$netns0" /var/run/amneziawg/wg2.sock "UAPI socket wg2"
 ip0 link set wg2 netns "$netns2"
 
-key1="$(pp wg genkey)"
-key2="$(pp wg genkey)"
-pub1="$(pp wg pubkey <<<"$key1")"
-pub2="$(pp wg pubkey <<<"$key2")"
-psk="$(pp wg genpsk)"
+key1_b64="$(pp wg genkey)"
+key2_b64="$(pp wg genkey)"
+pub1_b64="$(pp wg pubkey <<<"$key1_b64")"
+pub2_b64="$(pp wg pubkey <<<"$key2_b64")"
+psk_b64="$(pp wg genpsk)"
+
+key1="$(b64_to_hex "$key1_b64")"
+key2="$(b64_to_hex "$key2_b64")"
+pub1="$(b64_to_hex "$pub1_b64")"
+pub2="$(b64_to_hex "$pub2_b64")"
+psk="$(b64_to_hex "$psk_b64")"
 
 ip1 addr add 192.168.241.1/24 dev wg1
 ip2 addr add 192.168.241.2/24 dev wg2
