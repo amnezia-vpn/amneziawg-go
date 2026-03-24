@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -97,6 +99,54 @@ func genConfigs(tb testing.TB, cfg ...string) (cfgs, endpointCfgs [2]string) {
 	endpointCfgs[1] = uapiCfg(
 		"public_key", hex.EncodeToString(pub1[:]),
 		"endpoint", "127.0.0.1:%d",
+	)
+	return
+}
+
+func genTCPConfigs(tb testing.TB, ports [2]int, cfg ...string) (cfgs, endpointCfgs [2]string) {
+	var key1, key2 NoisePrivateKey
+	_, err := rand.Read(key1[:])
+	if err != nil {
+		tb.Errorf("unable to generate private key random bytes: %v", err)
+	}
+	_, err = rand.Read(key2[:])
+	if err != nil {
+		tb.Errorf("unable to generate private key random bytes: %v", err)
+	}
+	pub1, pub2 := key1.publicKey(), key2.publicKey()
+
+	args0 := append([]string(nil), cfg...)
+	args0 = append(args0, []string{
+		"private_key", hex.EncodeToString(key1[:]),
+		"listen_port", strconv.Itoa(ports[0]),
+		"replace_peers", "true",
+		"public_key", hex.EncodeToString(pub2[:]),
+		"protocol_version", "1",
+		"replace_allowed_ips", "true",
+		"allowed_ip", "1.0.0.2/32",
+	}...)
+	cfgs[0] = uapiCfg(args0...)
+
+	endpointCfgs[0] = uapiCfg(
+		"public_key", hex.EncodeToString(pub2[:]),
+		"endpoint", fmt.Sprintf("127.0.0.1:%d", ports[1]),
+	)
+
+	args1 := append([]string(nil), cfg...)
+	args1 = append(args1, []string{
+		"private_key", hex.EncodeToString(key2[:]),
+		"listen_port", strconv.Itoa(ports[1]),
+		"replace_peers", "true",
+		"public_key", hex.EncodeToString(pub1[:]),
+		"protocol_version", "1",
+		"replace_allowed_ips", "true",
+		"allowed_ip", "1.0.0.1/32",
+	}...)
+
+	cfgs[1] = uapiCfg(args1...)
+	endpointCfgs[1] = uapiCfg(
+		"public_key", hex.EncodeToString(pub1[:]),
+		"endpoint", fmt.Sprintf("127.0.0.1:%d", ports[0]),
 	)
 	return
 }
@@ -213,6 +263,64 @@ func genTestPair(
 	return
 }
 
+func getFreeTCPPort(tb testing.TB) int {
+	tb.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatalf("failed to allocate tcp port: %v", err)
+	}
+	defer listener.Close()
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		tb.Fatalf("unexpected tcp addr type: %T", listener.Addr())
+	}
+
+	return addr.Port
+}
+
+func genTestPairTCP(tb testing.TB, extraCfg ...string) (pair testPair) {
+	ports := [2]int{getFreeTCPPort(tb), getFreeTCPPort(tb)}
+	cfg, endpointCfg := genTCPConfigs(tb, ports, extraCfg...)
+
+	var binds [2]conn.Bind
+	binds[0], binds[1] = conn.NewDefaultBind(), conn.NewDefaultBind()
+
+	for i := range pair {
+		p := &pair[i]
+		p.tun = tuntest.NewChannelTUN()
+		p.ip = netip.AddrFrom4([4]byte{1, 0, 0, byte(i + 1)})
+		level := LogLevelVerbose
+		if _, ok := tb.(*testing.B); ok && !testing.Verbose() {
+			level = LogLevelError
+		}
+		p.dev = NewDevice(p.tun.TUN(), binds[i], NewLogger(level, fmt.Sprintf("dev%d: ", i)))
+		if err := p.dev.IpcSet(cfg[i]); err != nil {
+			tb.Errorf("failed to configure tcp device %d: %v", i, err)
+			p.dev.Close()
+			continue
+		}
+		if err := p.dev.Up(); err != nil {
+			tb.Errorf("failed to bring up tcp device %d: %v", i, err)
+			p.dev.Close()
+			continue
+		}
+	}
+
+	for i := range pair {
+		p := &pair[i]
+		if err := p.dev.IpcSet(endpointCfg[i]); err != nil {
+			tb.Errorf("failed to configure tcp endpoint %d: %v", i, err)
+			p.dev.Close()
+			continue
+		}
+		tb.Cleanup(p.dev.Close)
+	}
+
+	return
+}
+
 func TestTwoDevicePing(t *testing.T) {
 	goroutineLeakCheck(t)
 	pair := genTestPair(t, true)
@@ -239,6 +347,30 @@ func TestAWGDevicePing(t *testing.T) {
 		"h1", "123456-123500",
 		"h2", "67543-67550",
 		"h3", "123123-123200",
+		"h4", "32345-32350",
+	)
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		pair.Send(t, Ping, nil)
+	})
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		pair.Send(t, Pong, nil)
+	})
+}
+
+func TestAWGDevicePingTCPConceal(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPairTCP(t,
+		"network", "tcp",
+		"format_in", "<b 0xfeed><dz be 2><d>",
+		"format_out", "<b 0xfeed><dz be 2><d>",
+		"i1", "<b 0xaabb>",
+		"i2", "<b 0xccdd>",
+		"s1", "15",
+		"s2", "18",
+		"s4", "25",
+		"h1", "123456-123500",
+		"h2", "67543-67550",
 		"h4", "32345-32350",
 	)
 	t.Run("ping 1.0.0.1", func(t *testing.T) {

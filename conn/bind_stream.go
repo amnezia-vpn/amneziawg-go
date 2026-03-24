@@ -169,6 +169,9 @@ func (b *BindStream) openConnections() error {
 		if err != nil {
 			return err
 		}
+		if addr, ok := listener.Addr().(*net.TCPAddr); ok {
+			b.port = uint16(addr.Port)
+		}
 
 		b.wg.Add(1)
 		go func() {
@@ -188,7 +191,8 @@ func (b *BindStream) Open(port uint16) (fns []ReceiveFunc, actualPort uint16, er
 	b.queue = make(chan *streamPacketQueue, 1024)
 	b.port = port
 
-	return []ReceiveFunc{b.readFaucet()}, b.port, b.openConnections()
+	err = b.openConnections()
+	return []ReceiveFunc{b.readFaucet()}, b.port, err
 }
 
 func (b *BindStream) Send(bufs [][]byte, ep Endpoint) error {
