@@ -1,7 +1,6 @@
 package conceal
 
 import (
-	"bytes"
 	"net"
 	"sync"
 
@@ -48,12 +47,12 @@ func (c *MasqueradeConn) ReadRecord(b []byte) (n int, err error) {
 		return 0, ErrNoReadRecord
 	}
 
-	ctx := &readContext{
+	ctx := readContext{
 		FlexBuffer: WrapFlexBuffer(b),
 		BufferPool: c.pool,
 	}
 
-	if err := c.rulesIn.Read(c.Conn, ctx); err != nil {
+	if err := c.rulesIn.Read(c.Conn, &ctx); err != nil {
 		return 0, err
 	}
 
@@ -65,25 +64,26 @@ func (c *MasqueradeConn) WriteRecord(b []byte) (n int, err error) {
 		return 0, ErrNoWriteRecord
 	}
 
-	ctx := &writeContext{
+	ctx := writeContext{
 		FlexBuffer: WrapFlexBuffer(b),
 		BufferPool: c.pool,
 	}
 
 	t := c.pool.Get()
-	defer c.pool.Put(t)
+	w := newSliceWriter(t)
 
-	w := bytes.NewBuffer(t[:0])
-
-	if err := c.rulesOut.Write(w, ctx); err != nil {
+	if err := c.rulesOut.Write(&w, &ctx); err != nil {
+		c.pool.Put(t)
 		return 0, err
 	}
 
 	if _, err := c.Conn.Write(w.Bytes()); err != nil {
+		c.pool.Put(t)
 		return 0, err
 	}
 
-	return ctx.Len(), nil
+	c.pool.Put(t)
+	return len(b), nil
 }
 
 func (c *MasqueradeConn) Read(b []byte) (n int, err error) {
@@ -126,13 +126,13 @@ func (c *MasqueradeUDPConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr 
 		return n, oobn, flags, addr, err
 	}
 
-	r := bytes.NewBuffer(b[:n])
-	ctx := &readContext{
+	r := newSliceReader(b[:n])
+	ctx := readContext{
 		FlexBuffer: WrapFlexBuffer(b),
 		BufferPool: c.pool,
 	}
 
-	if err = c.rulesIn.Read(r, ctx); err != nil {
+	if err = c.rulesIn.Read(&r, &ctx); err != nil {
 		return 0, oobn, flags, addr, err
 	}
 
@@ -141,19 +141,23 @@ func (c *MasqueradeUDPConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr 
 
 func (c *MasqueradeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
 	t := c.pool.Get()
-	defer c.pool.Put(t)
-
-	w := bytes.NewBuffer(t[:0])
-	ctx := &writeContext{
+	w := newSliceWriter(t)
+	ctx := writeContext{
 		FlexBuffer: WrapFlexBuffer(b),
 		BufferPool: c.pool,
 	}
 
-	if err = c.rulesOut.Write(w, ctx); err != nil {
+	if err = c.rulesOut.Write(&w, &ctx); err != nil {
+		c.pool.Put(t)
 		return 0, 0, err
 	}
 
-	return c.UDPConn.WriteMsgUDP(t[:ctx.Len()], oob, addr)
+	n, oobn, err = c.UDPConn.WriteMsgUDP(w.Bytes(), oob, addr)
+	c.pool.Put(t)
+	if err != nil {
+		return 0, oobn, err
+	}
+	return len(b), oobn, nil
 }
 
 func NewMasqueradeBatchConn(conn BatchConn, bp *sync.Pool, opts MasqueradeOpts) (c *MasqueradeBatchConn, ok bool) {
@@ -183,13 +187,13 @@ func (c *MasqueradeBatchConn) ReadBatch(ms []ipv4.Message, flags int) (n int, er
 	}
 
 	for i := range n {
-		r := bytes.NewBuffer(ms[i].Buffers[0][:ms[i].N])
-		ctx := &readContext{
+		r := newSliceReader(ms[i].Buffers[0][:ms[i].N])
+		ctx := readContext{
 			FlexBuffer: WrapFlexBuffer(ms[i].Buffers[0]),
 			BufferPool: c.pool,
 		}
 
-		if err = c.rulesIn.Read(r, ctx); err != nil {
+		if err = c.rulesIn.Read(&r, &ctx); err != nil {
 			return 0, err
 		}
 
@@ -200,22 +204,35 @@ func (c *MasqueradeBatchConn) ReadBatch(ms []ipv4.Message, flags int) (n int, er
 }
 
 func (c *MasqueradeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err error) {
+	var inline [128][]byte
+	pooled := inline[:0]
+	if len(ms) > len(inline) {
+		pooled = make([][]byte, 0, len(ms))
+	}
+
 	for i := range ms {
 		t := c.pool.Get()
-		defer c.pool.Put(t)
+		pooled = append(pooled, t)
 
-		w := bytes.NewBuffer(t[:0])
-		ctx := &writeContext{
+		w := newSliceWriter(t)
+		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(ms[i].Buffers[0]),
 			BufferPool: c.pool,
 		}
 
-		if err = c.rulesOut.Write(w, ctx); err != nil {
+		if err = c.rulesOut.Write(&w, &ctx); err != nil {
+			for _, buf := range pooled {
+				c.pool.Put(buf)
+			}
 			return 0, err
 		}
 
 		ms[i].Buffers[0] = w.Bytes()
 	}
 
-	return c.BatchConn.WriteBatch(ms, flags)
+	n, err = c.BatchConn.WriteBatch(ms, flags)
+	for _, buf := range pooled {
+		c.pool.Put(buf)
+	}
+	return n, err
 }

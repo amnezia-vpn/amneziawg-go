@@ -1,7 +1,6 @@
 package conceal
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"math/big"
@@ -103,35 +102,39 @@ func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn 
 	}
 
 	if isInit {
-		b := c.pool.Get()
-		defer c.pool.Put(b)
-
-		ctx := &writeContext{
+		buf := c.pool.Get()
+		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(nil),
 			BufferPool: c.pool,
 		}
+		w := newSliceWriter(buf)
 
 		for _, rules := range c.rulesArr {
 			if rules == nil {
 				continue
 			}
 
-			w := bytes.NewBuffer(b[:0])
-			if err = rules.Write(w, ctx); err != nil {
+			w.Reset(buf)
+			if err = rules.Write(&w, &ctx); err != nil {
+				c.pool.Put(buf)
 				return 0, 0, err
 			}
 
 			if _, _, err = c.origin.WriteMsgUDP(w.Bytes(), oob, addr); err != nil {
+				c.pool.Put(buf)
 				return 0, 0, err
 			}
 		}
 
 		for range c.junkCount {
-			junk := c.junkGen.generate(b)
+			junk := c.junkGen.generate(buf)
 			if _, _, err = c.origin.WriteMsgUDP(junk, oob, addr); err != nil {
+				c.pool.Put(buf)
 				return 0, 0, err
 			}
 		}
+
+		c.pool.Put(buf)
 	}
 
 	return c.UDPConn.WriteMsgUDP(b, oob, addr)
@@ -194,28 +197,30 @@ func (c *PreludeConn) Write(b []byte) (n int, err error) {
 
 func (c *PreludeConn) writePreludeRecords() (err error) {
 	buf := c.pool.Get()
-	defer c.pool.Put(buf)
-
-	ctx := &writeContext{
+	ctx := writeContext{
 		FlexBuffer: WrapFlexBuffer(nil),
 		BufferPool: c.pool,
 	}
+	w := newSliceWriter(buf)
 
 	for _, rules := range c.rulesArr {
 		if rules == nil {
 			continue
 		}
 
-		w := bytes.NewBuffer(buf[:0])
-		if err = rules.Write(w, ctx); err != nil {
+		w.Reset(buf)
+		if err = rules.Write(&w, &ctx); err != nil {
+			c.pool.Put(buf)
 			return err
 		}
 
 		if _, err = c.StreamRecordConn.WriteRecord(w.Bytes()); err != nil {
+			c.pool.Put(buf)
 			return err
 		}
 	}
 
+	c.pool.Put(buf)
 	return nil
 }
 
@@ -278,13 +283,25 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 	}
 
 	if initMsg != nil {
-		ctx := &writeContext{
+		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(nil),
 			BufferPool: c.bufPool,
 		}
 
 		msgs := c.msgsPool.Get().(*[]ipv4.Message)
-		defer c.msgsPool.Put(msgs)
+		count := c.junkCount
+		for _, rules := range c.rulesArr {
+			if rules != nil {
+				count++
+			}
+		}
+
+		var inline [32][]byte
+		pooled := inline[:0]
+		if count > len(inline) {
+			pooled = make([][]byte, 0, count)
+		}
+
 		i := 0
 
 		for _, rules := range c.rulesArr {
@@ -293,10 +310,14 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 			}
 
 			buf := c.bufPool.Get()
-			defer c.bufPool.Put(buf)
+			pooled = append(pooled, buf)
 
-			w := bytes.NewBuffer(buf[:0])
-			if err = rules.Write(w, ctx); err != nil {
+			w := newSliceWriter(buf)
+			if err = rules.Write(&w, &ctx); err != nil {
+				for _, pooledBuf := range pooled {
+					c.bufPool.Put(pooledBuf)
+				}
+				c.msgsPool.Put(msgs)
 				return 0, err
 			}
 
@@ -308,7 +329,7 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 
 		for range c.junkCount {
 			buf := c.bufPool.Get()
-			defer c.bufPool.Put(buf)
+			pooled = append(pooled, buf)
 
 			(*msgs)[i].Buffers[0] = c.junkGen.generate(buf)
 			(*msgs)[i].OOB = initMsg.OOB
@@ -321,6 +342,10 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 			m := (*msgs)[start:i]
 			n, err = c.origin.WriteBatch(m, flags)
 			if err != nil {
+				for _, pooledBuf := range pooled {
+					c.bufPool.Put(pooledBuf)
+				}
+				c.msgsPool.Put(msgs)
 				return 0, err
 			}
 			if n == len(m) {
@@ -328,6 +353,11 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 			}
 			start += n
 		}
+
+		for _, pooledBuf := range pooled {
+			c.bufPool.Put(pooledBuf)
+		}
+		c.msgsPool.Put(msgs)
 	}
 
 	return c.BatchConn.WriteBatch(ms, flags)

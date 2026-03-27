@@ -178,15 +178,15 @@ func benchmarkEncodeFramedRecord(opts FramedOpts, payload []byte) []byte {
 
 func benchmarkEncodeMasqueradeRecord(rules Rules, payload []byte) []byte {
 	pool := benchmarkNewBufferPool()
-	ctx := &writeContext{
+	ctx := writeContext{
 		FlexBuffer: WrapFlexBuffer(payload),
 		BufferPool: WrapBufferPool(pool),
 	}
 	tmp := pool.Get().([]byte)
 	defer pool.Put(tmp)
 
-	w := bytes.NewBuffer(tmp[:0])
-	if err := rules.Write(w, ctx); err != nil {
+	w := newSliceWriter(tmp)
+	if err := rules.Write(&w, &ctx); err != nil {
 		panic(err)
 	}
 	return append([]byte(nil), w.Bytes()...)

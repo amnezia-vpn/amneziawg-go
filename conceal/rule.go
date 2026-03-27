@@ -19,13 +19,13 @@ var (
 )
 
 type readContext struct {
-	*FlexBuffer
+	FlexBuffer
 	*BufferPool
 	nextDataSize int
 }
 
 type writeContext struct {
-	*FlexBuffer
+	FlexBuffer
 	*BufferPool
 }
 
