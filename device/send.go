@@ -574,16 +574,15 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		for _, elem := range elemsContainer.elems {
 			if len(elem.packet) != MessageKeepaliveSize {
 				dataSent = true
-
-				if padding := device.paddings.transport; padding > 0 {
-					// elem.packet is stored at the start of elem.buffer
-					// with zero padding
-					for i := len(elem.packet) - 1; i >= 0; i-- {
-						elem.buffer[i+padding] = elem.buffer[i]
-					}
-					rand.Read(elem.buffer[:padding])
-					elem.packet = elem.buffer[:padding+len(elem.packet)]
+			}
+			if padding := device.paddings.transport; padding > 0 {
+				// elem.packet is stored at the start of elem.buffer
+				// with zero padding
+				for i := len(elem.packet) - 1; i >= 0; i-- {
+					elem.buffer[i+padding] = elem.buffer[i]
 				}
+				rand.Read(elem.buffer[:padding])
+				elem.packet = elem.buffer[:padding+len(elem.packet)]
 			}
 			bufs = append(bufs, elem.packet)
 		}
