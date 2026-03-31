@@ -78,7 +78,7 @@ The amount of junk packets specified in `Jc` with a random size between `Jmin` a
 
 ### Message headers
 
-Every message in wireguard has `int32` type at the beginning of the packet. This field could be controlled by specifying the params below:
+Every message in wireguard has `uint32` type at the beginning of the packet. This field could be controlled by specifying the params below:
 
 - `H1: string` - header range of handshake initial message
 - `H2: string` - header range of handshake initial message
