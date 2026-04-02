@@ -377,9 +377,15 @@ func (c *FramedBatchConn) ReadBatch(ms []ipv4.Message, flags int) (n int, err er
 }
 
 func (c *FramedBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err error) {
+	var inline [128][]byte
+	pooled := inline[:0]
+	if len(ms) > len(inline) {
+		pooled = make([][]byte, 0, len(ms))
+	}
+
 	for i := range ms {
 		t := c.pool.Get()
-		defer c.pool.Put(t)
+		pooled = append(pooled, t)
 
 		n = c.enc.Encode(t, ms[i].Buffers[0])
 		ms[i].Buffers[0] = t[:n]
@@ -387,5 +393,9 @@ func (c *FramedBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err e
 
 	// ms[i].N has incorrect N because the original data was modifier above
 	// however, WG does not check this field, so this is fine
-	return c.BatchConn.WriteBatch(ms, flags)
+	n, err = c.BatchConn.WriteBatch(ms, flags)
+	for _, buf := range pooled {
+		c.pool.Put(buf)
+	}
+	return n, err
 }

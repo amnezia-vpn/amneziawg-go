@@ -251,13 +251,14 @@ func (s *StdNetBind) receiveIP(
 	eps []Endpoint,
 ) (n int, err error) {
 	msgs := s.getMessages()
-	for i := range bufs {
-		(*msgs)[i].Buffers[0] = bufs[i]
-		(*msgs)[i].OOB = (*msgs)[i].OOB[:cap((*msgs)[i].OOB)]
-	}
 	defer s.putMessages(msgs)
+
 	var numMsgs int
 	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+		for i := range bufs {
+			(*msgs)[i].Buffers[0] = bufs[i]
+			(*msgs)[i].OOB = (*msgs)[i].OOB[:cap((*msgs)[i].OOB)]
+		}
 		if rxOffload {
 			readAt := len(*msgs) - (IdealBatchSize / udpSegmentMaxDatagrams)
 			numMsgs, err = br.ReadBatch((*msgs)[readAt:], 0)
@@ -276,6 +277,8 @@ func (s *StdNetBind) receiveIP(
 		}
 	} else {
 		msg := &(*msgs)[0]
+		msg.Buffers[0] = bufs[0]
+		msg.OOB = msg.OOB[:cap(msg.OOB)]
 		msg.N, msg.NN, _, msg.Addr, err = conn.ReadMsgUDP(msg.Buffers[0], msg.OOB)
 		if err != nil {
 			return 0, err

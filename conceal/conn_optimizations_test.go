@@ -105,6 +105,102 @@ func TestMasqueradeBatchConnWriteBatchEncodesEachMessage(t *testing.T) {
 	}
 }
 
+func TestFramedBatchConnReadBatchDecodesEachMessage(t *testing.T) {
+	initiation := make([]byte, WireguardMsgInitiationSize)
+	copy(initiation[:4], []byte{0x88, 0x77, 0x66, 0x55})
+	initiation[4], initiation[5] = 0xaa, 0xbb
+	transport := make([]byte, WireguardMsgTransportMinSize)
+	copy(transport[:4], []byte{0x44, 0x33, 0x22, 0x11})
+	transport[4], transport[5] = 0xcc, 0xdd
+
+	raw := &recordingBatchConn{
+		readBatches: [][]recordedBatchMessage{
+			{
+				{data: initiation},
+				{data: transport},
+			},
+		},
+	}
+	pool := newTestBufferPool()
+	opts := FramedOpts{
+		H1: &RangedHeader{0x55667788, 0x55667788},
+		H4: &RangedHeader{0x11223344, 0x11223344},
+	}
+
+	conn, ok := NewFramedBatchConn(raw, pool, opts)
+	if !ok {
+		t.Fatal("expected framed batch conn")
+	}
+
+	msgs := []ipv4.Message{
+		{Buffers: net.Buffers{make([]byte, WireguardMsgInitiationSize)}},
+		{Buffers: net.Buffers{make([]byte, WireguardMsgTransportMinSize)}},
+	}
+	n, err := conn.ReadBatch(msgs, 0)
+	if err != nil {
+		t.Fatalf("ReadBatch failed: %v", err)
+	}
+	if n != len(msgs) {
+		t.Fatalf("ReadBatch n = %d, want %d", n, len(msgs))
+	}
+
+	want := [][]byte{
+		make([]byte, WireguardMsgInitiationSize),
+		make([]byte, WireguardMsgTransportMinSize),
+	}
+	binary.LittleEndian.PutUint32(want[0][:4], WireguardMsgInitiationType)
+	binary.LittleEndian.PutUint32(want[1][:4], WireguardMsgTransportType)
+	want[0][4], want[0][5] = 0xaa, 0xbb
+	want[1][4], want[1][5] = 0xcc, 0xdd
+	for i := range msgs {
+		if msgs[i].N != len(want[i]) {
+			t.Fatalf("msg %d N = %d, want %d", i, msgs[i].N, len(want[i]))
+		}
+		if !bytes.Equal(msgs[i].Buffers[0][:msgs[i].N], want[i]) {
+			t.Fatalf("msg %d = %x, want %x", i, msgs[i].Buffers[0][:msgs[i].N], want[i])
+		}
+	}
+}
+
+func TestFramedBatchConnWriteBatchEncodesEachMessage(t *testing.T) {
+	raw := &recordingBatchConn{}
+	pool := newTestBufferPool()
+	opts := FramedOpts{
+		H1: &RangedHeader{0x55667788, 0x55667788},
+		H4: &RangedHeader{0x11223344, 0x11223344},
+	}
+
+	conn, ok := NewFramedBatchConn(raw, pool, opts)
+	if !ok {
+		t.Fatal("expected framed batch conn")
+	}
+
+	msgs := []ipv4.Message{
+		{Buffers: net.Buffers{[]byte{WireguardMsgInitiationType, 0x00, 0x00, 0x00, 0xaa, 0xbb}}},
+		{Buffers: net.Buffers{[]byte{WireguardMsgTransportType, 0x00, 0x00, 0x00, 0xcc, 0xdd}}},
+	}
+	n, err := conn.WriteBatch(msgs, 0)
+	if err != nil {
+		t.Fatalf("WriteBatch failed: %v", err)
+	}
+	if n != len(msgs) {
+		t.Fatalf("WriteBatch n = %d, want %d", n, len(msgs))
+	}
+	if len(raw.batches) != 1 {
+		t.Fatalf("batch count = %d, want 1", len(raw.batches))
+	}
+
+	want := [][]byte{
+		{0x88, 0x77, 0x66, 0x55, 0xaa, 0xbb},
+		{0x44, 0x33, 0x22, 0x11, 0xcc, 0xdd},
+	}
+	for i, got := range raw.batches[0] {
+		if !bytes.Equal(got.data, want[i]) {
+			t.Fatalf("batch msg %d = %x, want %x", i, got.data, want[i])
+		}
+	}
+}
+
 func TestPreludeBatchConnWriteBatchEmitsPreludeBeforeInitiation(t *testing.T) {
 	raw := &recordingBatchConn{}
 	pool := newTestBufferPool()
@@ -276,11 +372,28 @@ type recordedBatchMessage struct {
 }
 
 type recordingBatchConn struct {
-	batches [][]recordedBatchMessage
+	batches     [][]recordedBatchMessage
+	readBatches [][]recordedBatchMessage
+	readIndex   int
 }
 
-func (c *recordingBatchConn) ReadBatch([]ipv4.Message, int) (int, error) {
-	return 0, errors.New("not implemented")
+func (c *recordingBatchConn) ReadBatch(ms []ipv4.Message, flags int) (int, error) {
+	if len(c.readBatches) == 0 {
+		return 0, errors.New("not implemented")
+	}
+	batch := c.readBatches[c.readIndex]
+	c.readIndex++
+	if c.readIndex == len(c.readBatches) {
+		c.readIndex = 0
+	}
+	for i := range batch {
+		msg := &ms[i]
+		msg.N = copy(msg.Buffers[0], batch[i].data)
+	}
+	for i := len(batch); i < len(ms); i++ {
+		ms[i].N = 0
+	}
+	return len(batch), nil
 }
 
 func (c *recordingBatchConn) WriteBatch(ms []ipv4.Message, flags int) (int, error) {
