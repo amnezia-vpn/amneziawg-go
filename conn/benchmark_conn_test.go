@@ -237,7 +237,9 @@ func BenchmarkConnStdNetBindReceive(b *testing.B) {
 			name:      "single",
 			batchSize: 1,
 			rxOffload: false,
-			reader:    &benchmarkConnLinuxPacketConn{},
+			reader: &benchmarkConnLinuxPacketConn{
+				readBatches: [][]benchmarkConnPacket{benchmarkConnBatchPackets(1, 256)},
+			},
 			conn: &benchmarkConnUDPConn{
 				readPayloads: [][]byte{benchmarkConnPayload(256)},
 			},
