@@ -152,9 +152,29 @@ function Invoke-UapiOperation([string]$InterfaceName, [string]$Operation, [strin
     }
 }
 
-function Wait-UapiReady([string]$InterfaceName, [int]$TimeoutSec) {
+function Get-LogTail([string]$Path, [int]$MaxLines = 40) {
+    if (-not (Test-Path $Path)) {
+        return ""
+    }
+    return ((Get-Content -Path $Path -Tail $MaxLines -ErrorAction SilentlyContinue) -join "`n")
+}
+
+function Wait-UapiReady([pscustomobject]$ProcessInfo, [string]$InterfaceName, [int]$TimeoutSec) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
+        if ($ProcessInfo.Process.HasExited) {
+            $stderrTail = Get-LogTail -Path $ProcessInfo.StderrPath
+            $stdoutTail = Get-LogTail -Path $ProcessInfo.StdoutPath
+            throw @"
+Process for $InterfaceName exited before the UAPI pipe was ready.
+ExitCode: $($ProcessInfo.Process.ExitCode)
+stderr:
+$stderrTail
+
+stdout:
+$stdoutTail
+"@
+        }
         try {
             $pipe = Open-UapiPipe -InterfaceName $InterfaceName -TimeoutMs 500
             $pipe.Dispose()
@@ -295,16 +315,22 @@ function Stop-Capture([string]$EtlPath, [string]$PcapPath) {
 function Start-AwgProcess([string]$InterfaceName, [string]$ModeOutDir) {
     $stdout = Join-Path $ModeOutDir "$InterfaceName.stdout.log"
     $stderr = Join-Path $ModeOutDir "$InterfaceName.stderr.log"
-    return Start-Process -FilePath $ProgramPath -ArgumentList @($InterfaceName) -WorkingDirectory $RepoRoot -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $process = Start-Process -FilePath $ProgramPath -ArgumentList @($InterfaceName) -WorkingDirectory $RepoRoot -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    return [PSCustomObject]@{
+        InterfaceName = $InterfaceName
+        Process = $process
+        StdoutPath = $stdout
+        StderrPath = $stderr
+    }
 }
 
-function Stop-AwgProcess([System.Diagnostics.Process]$Process) {
-    if ($null -eq $Process) {
+function Stop-AwgProcess([pscustomobject]$ProcessInfo) {
+    if ($null -eq $ProcessInfo) {
         return
     }
     try {
-        if (-not $Process.HasExited) {
-            Stop-Process -Id $Process.Id -Force
+        if (-not $ProcessInfo.Process.HasExited) {
+            Stop-Process -Id $ProcessInfo.Process.Id -Force
         }
     }
     catch {}
@@ -402,8 +428,8 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
         $procA = Start-AwgProcess -InterfaceName $ifaceA -ModeOutDir $modeOutDir
         $procB = Start-AwgProcess -InterfaceName $ifaceB -ModeOutDir $modeOutDir
 
-        Wait-UapiReady -InterfaceName $ifaceA -TimeoutSec 20
-        Wait-UapiReady -InterfaceName $ifaceB -TimeoutSec 20
+        Wait-UapiReady -ProcessInfo $procA -InterfaceName $ifaceA -TimeoutSec 20
+        Wait-UapiReady -ProcessInfo $procB -InterfaceName $ifaceB -TimeoutSec 20
 
         $configA = @(
             "private_key", $keyA.private,
