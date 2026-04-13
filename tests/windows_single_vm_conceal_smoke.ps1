@@ -478,34 +478,44 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
         Wait-UapiReady -ProcessInfo $procA -InterfaceName $ifaceA -TimeoutSec 20
         Wait-UapiReady -ProcessInfo $procB -InterfaceName $ifaceB -TimeoutSec 20
 
-        $configA = @(
+        $deviceConfigA = @(
             "private_key", $keyA.private,
             "listen_port", "$($profile.PortA)",
-            "replace_peers", "true",
+            "replace_peers", "true"
+        ) + $profile.DeviceArgs
+
+        $peerConfigA = @(
             "public_key", $keyB.public,
             "preshared_key", $psk.psk,
             "protocol_version", "1",
             "replace_allowed_ips", "true",
             "allowed_ip", "10.99.0.2/32",
             "endpoint", "127.0.0.1:$($profile.PortB)"
-        ) + $profile.DeviceArgs
+        )
 
-        $configB = @(
+        $deviceConfigB = @(
             "private_key", $keyB.private,
             "listen_port", "$($profile.PortB)",
-            "replace_peers", "true",
+            "replace_peers", "true"
+        ) + $profile.DeviceArgs
+
+        $peerConfigB = @(
             "public_key", $keyA.public,
             "preshared_key", $psk.psk,
             "protocol_version", "1",
             "replace_allowed_ips", "true",
             "allowed_ip", "10.99.0.1/32",
             "endpoint", "127.0.0.1:$($profile.PortA)"
-        ) + $profile.DeviceArgs
+        )
 
+        Write-Phase "Applying device config for $ifaceA"
+        Invoke-UapiOperation -InterfaceName $ifaceA -Operation "set" -Body (New-UapiConfig -Pairs $deviceConfigA) | Out-Null
+        Write-Phase "Applying device config for $ifaceB"
+        Invoke-UapiOperation -InterfaceName $ifaceB -Operation "set" -Body (New-UapiConfig -Pairs $deviceConfigB) | Out-Null
         Write-Phase "Applying peer config for $ifaceA"
-        Invoke-UapiOperation -InterfaceName $ifaceA -Operation "set" -Body (New-UapiConfig -Pairs $configA) | Out-Null
+        Invoke-UapiOperation -InterfaceName $ifaceA -Operation "set" -Body (New-UapiConfig -Pairs $peerConfigA) | Out-Null
         Write-Phase "Applying peer config for $ifaceB"
-        Invoke-UapiOperation -InterfaceName $ifaceB -Operation "set" -Body (New-UapiConfig -Pairs $configB) | Out-Null
+        Invoke-UapiOperation -InterfaceName $ifaceB -Operation "set" -Body (New-UapiConfig -Pairs $peerConfigB) | Out-Null
 
         Start-Capture -EtlPath $captureEtl -PortA $profile.PortA -PortB $profile.PortB -TransportProtocol $SelectedMode
         try {
