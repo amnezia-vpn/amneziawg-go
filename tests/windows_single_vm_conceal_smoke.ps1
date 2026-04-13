@@ -73,6 +73,10 @@ function New-Directory([string]$Path) {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
 
+function Write-Phase([string]$Message) {
+    Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+}
+
 function Invoke-JsonCommand([string]$FilePath, [string[]]$Arguments) {
     Push-Location $RepoRoot
     try {
@@ -182,6 +186,7 @@ function Get-LogTail([string]$Path, [int]$MaxLines = 40) {
 }
 
 function Wait-UapiReady([pscustomobject]$ProcessInfo, [string]$InterfaceName, [int]$TimeoutSec) {
+    Write-Phase "Waiting for UAPI pipe for $InterfaceName"
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if ($ProcessInfo.Process.HasExited) {
@@ -200,6 +205,7 @@ $stdoutTail
         try {
             $pipe = Open-UapiPipe -InterfaceName $InterfaceName -TimeoutMs 500
             $pipe.Dispose()
+            Write-Phase "UAPI pipe ready for $InterfaceName"
             return
         }
         catch {
@@ -236,12 +242,15 @@ function Convert-LinesToMap([string]$Text) {
 }
 
 function Wait-Handshake([string]$InterfaceName, [int]$TimeoutSec) {
+    Write-Phase "Waiting for handshake on $InterfaceName"
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $lastReport = [DateTime]::MinValue
     while ((Get-Date) -lt $deadline) {
         $state = Convert-LinesToMap (Invoke-UapiOperation -InterfaceName $InterfaceName -Operation "get" -Body "")
         $hs = 0
         $tx = 0
         $rx = 0
+        $network = ""
         if ($state.ContainsKey("last_handshake_time_sec")) {
             $hs = [int64]$state["last_handshake_time_sec"]
         }
@@ -251,9 +260,19 @@ function Wait-Handshake([string]$InterfaceName, [int]$TimeoutSec) {
         if ($state.ContainsKey("rx_bytes")) {
             $rx = [int64]$state["rx_bytes"]
         }
+        if ($state.ContainsKey("network")) {
+            $network = $state["network"]
+        }
 
         if ($hs -gt 0 -and $tx -gt 0 -and $rx -gt 0) {
+            Write-Phase "Handshake ready on $InterfaceName (network=$network, hs=$hs, tx=$tx, rx=$rx)"
             return $state
+        }
+
+        $now = Get-Date
+        if (($now - $lastReport).TotalSeconds -ge 2) {
+            Write-Phase "Still waiting on $InterfaceName (network=$network, hs=$hs, tx=$tx, rx=$rx)"
+            $lastReport = $now
         }
 
         Start-Sleep -Milliseconds 500
@@ -317,6 +336,7 @@ function Invoke-Pktmon([string[]]$Arguments) {
 }
 
 function Start-Capture([string]$EtlPath, [int]$PortA, [int]$PortB, [string]$TransportProtocol) {
+    Write-Phase "Starting pktmon capture for $TransportProtocol on ports $PortA/$PortB"
     try { & pktmon.exe stop | Out-Null } catch {}
     try { & pktmon.exe filter remove | Out-Null } catch {}
 
@@ -325,12 +345,14 @@ function Start-Capture([string]$EtlPath, [int]$PortA, [int]$PortB, [string]$Tran
 }
 
 function Stop-Capture([string]$EtlPath, [string]$PcapPath) {
+    Write-Phase "Stopping pktmon capture"
     try {
         Invoke-Pktmon @("stop")
     }
     finally {
         try { & pktmon.exe filter remove | Out-Null } catch {}
     }
+    Write-Phase "Converting ETL to PCAPNG"
     Invoke-Pktmon @("etl2pcap", $EtlPath, "--out", $PcapPath)
 }
 
@@ -430,6 +452,7 @@ function New-UapiConfig([string[]]$Pairs) {
 }
 
 function Invoke-ConcealSmoke([string]$SelectedMode) {
+    Write-Phase "Starting conceal smoke for mode=$SelectedMode"
     $profile = New-ModeProfile -SelectedMode $SelectedMode
     $modeOutDir = Join-Path $OutDir $SelectedMode
     New-Directory $modeOutDir
@@ -443,10 +466,12 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
     $procB = $null
 
     try {
+        Write-Phase "Generating key material for mode=$SelectedMode"
         $keyA = New-Keypair
         $keyB = New-Keypair
         $psk = New-Psk
 
+        Write-Phase "Starting local peers $ifaceA and $ifaceB"
         $procA = Start-AwgProcess -InterfaceName $ifaceA -ModeOutDir $modeOutDir
         $procB = Start-AwgProcess -InterfaceName $ifaceB -ModeOutDir $modeOutDir
 
@@ -477,13 +502,16 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
             "endpoint", "127.0.0.1:$($profile.PortA)"
         ) + $profile.DeviceArgs
 
+        Write-Phase "Applying peer config for $ifaceA"
         Invoke-UapiOperation -InterfaceName $ifaceA -Operation "set" -Body (New-UapiConfig -Pairs $configA) | Out-Null
+        Write-Phase "Applying peer config for $ifaceB"
         Invoke-UapiOperation -InterfaceName $ifaceB -Operation "set" -Body (New-UapiConfig -Pairs $configB) | Out-Null
 
         Start-Capture -EtlPath $captureEtl -PortA $profile.PortA -PortB $profile.PortB -TransportProtocol $SelectedMode
         try {
             $kickA = New-UapiConfig -Pairs @("public_key", $keyB.public, "persistent_keepalive_interval", "1")
             $kickB = New-UapiConfig -Pairs @("public_key", $keyA.public, "persistent_keepalive_interval", "1")
+            Write-Phase "Triggering keepalive on $ifaceA and $ifaceB"
             Invoke-UapiOperation -InterfaceName $ifaceA -Operation "set" -Body $kickA | Out-Null
             Invoke-UapiOperation -InterfaceName $ifaceB -Operation "set" -Body $kickB | Out-Null
 
@@ -503,6 +531,7 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
             Stop-Capture -EtlPath $captureEtl -PcapPath $capturePcap
         }
 
+        Write-Phase "Validating capture markers for mode=$SelectedMode"
         $captureBytes = [System.IO.File]::ReadAllBytes($capturePcap)
         Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode format" -Needle (Convert-HexToBytes $profile.FormatHex)
         Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode I1 decoy" -Needle (Convert-HexToBytes $profile.I1Hex)
@@ -520,6 +549,7 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
         }
     }
     finally {
+        Write-Phase "Stopping local peers for mode=$SelectedMode"
         Stop-AwgProcess -Process $procA
         Stop-AwgProcess -Process $procB
     }
