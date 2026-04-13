@@ -553,10 +553,8 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
         Start-Capture -EtlPath $captureEtl -PortA $profile.PortA -PortB $profile.PortB -TransportProtocol $SelectedMode
         try {
             $kickA = New-UapiConfig -Pairs @("public_key", $keyB.public, "persistent_keepalive_interval", "1")
-            $kickB = New-UapiConfig -Pairs @("public_key", $keyA.public, "persistent_keepalive_interval", "1")
-            Write-Phase "Triggering keepalive on $ifaceA and $ifaceB"
+            Write-Phase "Triggering keepalive on $ifaceA"
             Invoke-UapiOperation -InterfaceName $ifaceA -Operation "set" -Body $kickA | Out-Null
-            Invoke-UapiOperation -InterfaceName $ifaceB -Operation "set" -Body $kickB | Out-Null
 
             $stateA = Wait-Handshake -InterfaceName $ifaceA -TimeoutSec $HandshakeTimeoutSec
             $stateB = Wait-Handshake -InterfaceName $ifaceB -TimeoutSec $HandshakeTimeoutSec
