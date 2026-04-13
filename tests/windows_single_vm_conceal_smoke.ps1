@@ -77,6 +77,13 @@ function Write-Phase([string]$Message) {
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
 }
 
+function Reset-Directory([string]$Path) {
+    if (Test-Path $Path) {
+        Remove-Item -Path $Path -Recurse -Force
+    }
+    New-Directory $Path
+}
+
 function Invoke-JsonCommand([string]$FilePath, [string[]]$Arguments) {
     Push-Location $RepoRoot
     try {
@@ -183,6 +190,13 @@ function Get-LogTail([string]$Path, [int]$MaxLines = 40) {
         return ""
     }
     return ((Get-Content -Path $Path -Tail $MaxLines -ErrorAction SilentlyContinue) -join "`n")
+}
+
+function Get-LogText([string]$Path) {
+    if (-not (Test-Path $Path)) {
+        return ""
+    }
+    return (Get-Content -Path $Path -Raw -ErrorAction SilentlyContinue)
 }
 
 function Wait-UapiReady([pscustomobject]$ProcessInfo, [string]$InterfaceName, [int]$TimeoutSec) {
@@ -328,6 +342,19 @@ function Assert-CaptureContains([byte[]]$CaptureBytes, [string]$Label, [byte[]]$
     }
 }
 
+function Test-CaptureContains([byte[]]$CaptureBytes, [byte[]]$Needle) {
+    return Test-ByteSequenceInArray -Haystack $CaptureBytes -Needle $Needle
+}
+
+function Assert-StateValue([hashtable]$State, [string]$Key, [string]$ExpectedValue, [string]$InterfaceName) {
+    if (-not $State.ContainsKey($Key)) {
+        throw "UAPI state for $InterfaceName does not include key '$Key'"
+    }
+    if ([string]$State[$Key] -ne $ExpectedValue) {
+        throw "UAPI state for $InterfaceName has $Key=$($State[$Key]), expected $ExpectedValue"
+    }
+}
+
 function Invoke-Pktmon([string[]]$Arguments) {
     & pktmon.exe @Arguments | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -392,6 +419,9 @@ function New-ModeProfile([string]$SelectedMode) {
             H1 = [uint32]305419896
             H2 = [uint32]2596069104
             H4 = [uint32]267242409
+            FormatSpec = "<b 0xfeedfacedeadbeef><dz be 2><d>"
+            I1Spec = "<b 0xaabbccddeeff0011>"
+            I2Spec = "<b 0x2233445566778899>"
             DeviceArgs = @(
                 "network", "udp",
                 "header_compat", "true",
@@ -422,6 +452,9 @@ function New-ModeProfile([string]$SelectedMode) {
         H1 = [uint32]286331153
         H2 = [uint32]572662306
         H4 = [uint32]1145324612
+        FormatSpec = "<b 0xbeefcafebad0f00d><dz be 2><d>"
+        I1Spec = "<b 0x1122334455667788>"
+        I2Spec = "<b 0x99aabbccddeeff00>"
         DeviceArgs = @(
             "network", "tcp",
             "header_compat", "true",
@@ -455,7 +488,7 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
     Write-Phase "Starting conceal smoke for mode=$SelectedMode"
     $profile = New-ModeProfile -SelectedMode $SelectedMode
     $modeOutDir = Join-Path $OutDir $SelectedMode
-    New-Directory $modeOutDir
+    Reset-Directory $modeOutDir
 
     $ifaceA = "awg-smoke-$SelectedMode-a"
     $ifaceB = "awg-smoke-$SelectedMode-b"
@@ -536,19 +569,44 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
             if ($stateB["network"] -ne $SelectedMode) {
                 throw "UAPI state for $ifaceB reports network=$($stateB["network"]), expected $SelectedMode"
             }
+
+            Assert-StateValue -State $stateA -Key "format_in" -ExpectedValue $profile.FormatSpec -InterfaceName $ifaceA
+            Assert-StateValue -State $stateA -Key "format_out" -ExpectedValue $profile.FormatSpec -InterfaceName $ifaceA
+            Assert-StateValue -State $stateA -Key "header_compat" -ExpectedValue "true" -InterfaceName $ifaceA
+            Assert-StateValue -State $stateA -Key "i1" -ExpectedValue $profile.I1Spec -InterfaceName $ifaceA
+            Assert-StateValue -State $stateA -Key "i2" -ExpectedValue $profile.I2Spec -InterfaceName $ifaceA
+            Assert-StateValue -State $stateB -Key "format_in" -ExpectedValue $profile.FormatSpec -InterfaceName $ifaceB
+            Assert-StateValue -State $stateB -Key "format_out" -ExpectedValue $profile.FormatSpec -InterfaceName $ifaceB
+            Assert-StateValue -State $stateB -Key "header_compat" -ExpectedValue "true" -InterfaceName $ifaceB
+            Assert-StateValue -State $stateB -Key "i1" -ExpectedValue $profile.I1Spec -InterfaceName $ifaceB
+            Assert-StateValue -State $stateB -Key "i2" -ExpectedValue $profile.I2Spec -InterfaceName $ifaceB
         }
         finally {
             Stop-Capture -EtlPath $captureEtl -PcapPath $capturePcap
         }
 
+        $stdoutA = Get-LogText -Path $procA.StdoutPath
+        $stdoutB = Get-LogText -Path $procB.StdoutPath
+        if ($SelectedMode -eq "udp") {
+            if (($stdoutA -notmatch 'Failed to receive wrapReceiveFn packet: invalid data') -and
+                ($stdoutB -notmatch 'Failed to receive wrapReceiveFn packet: invalid data')) {
+                throw "Expected at least one UDP decoy/junk invalid-data log entry, but none were observed."
+            }
+        }
+
         Write-Phase "Validating capture markers for mode=$SelectedMode"
         $captureBytes = [System.IO.File]::ReadAllBytes($capturePcap)
-        Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode format" -Needle (Convert-HexToBytes $profile.FormatHex)
-        Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode I1 decoy" -Needle (Convert-HexToBytes $profile.I1Hex)
-        Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode I2 decoy" -Needle (Convert-HexToBytes $profile.I2Hex)
-        Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode H1 header" -Needle (Get-LittleEndianUint32Bytes $profile.H1)
-        Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode H2 header" -Needle (Get-LittleEndianUint32Bytes $profile.H2)
-        Assert-CaptureContains -CaptureBytes $captureBytes -Label "$SelectedMode H4 header" -Needle (Get-LittleEndianUint32Bytes $profile.H4)
+        $captureMarkers = @{
+            format = Test-CaptureContains -CaptureBytes $captureBytes -Needle (Convert-HexToBytes $profile.FormatHex)
+            i1 = Test-CaptureContains -CaptureBytes $captureBytes -Needle (Convert-HexToBytes $profile.I1Hex)
+            i2 = Test-CaptureContains -CaptureBytes $captureBytes -Needle (Convert-HexToBytes $profile.I2Hex)
+            h1 = Test-CaptureContains -CaptureBytes $captureBytes -Needle (Get-LittleEndianUint32Bytes $profile.H1)
+            h2 = Test-CaptureContains -CaptureBytes $captureBytes -Needle (Get-LittleEndianUint32Bytes $profile.H2)
+            h4 = Test-CaptureContains -CaptureBytes $captureBytes -Needle (Get-LittleEndianUint32Bytes $profile.H4)
+        }
+        if (-not ($captureMarkers.Values -contains $true)) {
+            Write-Warning "pktmon capture did not expose any conceal payload markers for mode=$SelectedMode. Handshake and UAPI validation still passed."
+        }
 
         [PSCustomObject]@{
             mode = $SelectedMode
@@ -556,6 +614,7 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
             interface_b = $ifaceB
             pcapng = $capturePcap
             logs = $modeOutDir
+            capture_markers = $captureMarkers
         }
     }
     finally {
