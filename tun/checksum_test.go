@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
+
+const tcpProtocolNumber = 6
 
 func checksumRef(b []byte, initial uint16) uint16 {
 	ac := uint64(initial)
@@ -58,9 +58,9 @@ func TestPseudoHeaderChecksum(t *testing.T) {
 			rng.Read(srcAddr)
 			rng.Read(dstAddr)
 			rng.Read(buf)
-			phSum := pseudoHeaderChecksumNoFold(unix.IPPROTO_TCP, srcAddr, dstAddr, uint16(length))
+			phSum := pseudoHeaderChecksumNoFold(tcpProtocolNumber, srcAddr, dstAddr, uint16(length))
 			csum := checksum(buf, phSum)
-			phSumRef := pseudoHeaderChecksumRefNoFold(unix.IPPROTO_TCP, srcAddr, dstAddr, uint16(length))
+			phSumRef := pseudoHeaderChecksumRefNoFold(tcpProtocolNumber, srcAddr, dstAddr, uint16(length))
 			csumRef := checksumRef(buf, phSumRef)
 			if csum != csumRef {
 				t.Error("Expected checksumRef", csumRef, "got", csum)
