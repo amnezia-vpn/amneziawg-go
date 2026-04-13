@@ -6,6 +6,7 @@
 package ipc
 
 import (
+	"errors"
 	"net"
 
 	"github.com/amnezia-vpn/amneziawg-go/ipc/namedpipe"
@@ -69,7 +70,7 @@ func UAPIListen(name string) (net.Listener, error) {
 	listener, err := (&namedpipe.ListenConfig{
 		SecurityDescriptor: UAPISecurityDescriptor,
 	}).Listen(path)
-	if err == windows.ERROR_INVALID_OWNER {
+	if errors.Is(err, windows.ERROR_INVALID_OWNER) {
 		listener, err = (&namedpipe.ListenConfig{
 			SecurityDescriptor: UAPIFallbackSecurityDescriptor,
 		}).Listen(path)
