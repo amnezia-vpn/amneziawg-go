@@ -39,6 +39,28 @@ else {
     $OutDir = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $OutDir))
 }
 
+function Resolve-WintunDllPath {
+    $candidates = @(
+        (Join-Path (Split-Path -Parent $ProgramPath) "wintun.dll"),
+        (Join-Path $env:WINDIR "System32\wintun.dll")
+    )
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) {
+            return [System.IO.Path]::GetFullPath($candidate)
+        }
+    }
+
+    throw @"
+Required dependency wintun.dll was not found.
+Expected one of:
+- $(Join-Path (Split-Path -Parent $ProgramPath) "wintun.dll")
+- $(Join-Path $env:WINDIR "System32\wintun.dll")
+
+Place the architecture-matching Wintun DLL next to $ProgramPath and rerun the script.
+"@
+}
+
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -509,6 +531,9 @@ New-Directory $OutDir
 if (-not (Test-Path $ProgramPath)) {
     throw "Program path does not exist: $ProgramPath"
 }
+
+$wintunDllPath = Resolve-WintunDllPath
+Write-Host "Using Wintun DLL at $wintunDllPath"
 
 $modes = if ($Mode -eq "both") { @("udp", "tcp") } else { @($Mode) }
 $results = @()

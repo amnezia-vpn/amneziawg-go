@@ -50,6 +50,7 @@ func (l *UAPIListener) Addr() net.Addr {
 }
 
 var UAPISecurityDescriptor *windows.SECURITY_DESCRIPTOR
+var UAPIFallbackSecurityDescriptor *windows.SECURITY_DESCRIPTOR
 
 func init() {
 	var err error
@@ -57,12 +58,22 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+	UAPIFallbackSecurityDescriptor, err = windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)S:(ML;;NWNRNX;;;HI)")
+	if err != nil {
+		panic(err)
+	}
 }
 
 func UAPIListen(name string) (net.Listener, error) {
+	path := `\\.\pipe\ProtectedPrefix\Administrators\AmneziaWG\` + name
 	listener, err := (&namedpipe.ListenConfig{
 		SecurityDescriptor: UAPISecurityDescriptor,
-	}).Listen(`\\.\pipe\ProtectedPrefix\Administrators\AmneziaWG\` + name)
+	}).Listen(path)
+	if err == windows.ERROR_INVALID_OWNER {
+		listener, err = (&namedpipe.ListenConfig{
+			SecurityDescriptor: UAPIFallbackSecurityDescriptor,
+		}).Listen(path)
+	}
 	if err != nil {
 		return nil, err
 	}
