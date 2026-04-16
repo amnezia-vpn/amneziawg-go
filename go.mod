@@ -1,6 +1,6 @@
 module github.com/amnezia-vpn/amneziawg-go
 
-go 1.24.5
+go 1.26.1
 
 require (
 	github.com/Jigsaw-Code/outline-sdk v0.0.20
