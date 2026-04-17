@@ -3,5 +3,5 @@
 package conn
 
 func NewDefaultBind() Bind {
-	return NewMultibind(newDefaultWindowsUDPBind(), NewBindStream())
+	return NewMultibind(NewConcealBind(NewWinRingBind()), NewBindStream())
 }

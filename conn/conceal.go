@@ -59,18 +59,26 @@ func udpPreludeHeader(opts conceal.FramedOpts) *conceal.RangedHeader {
 	return nil
 }
 
-func (b *StdNetBind) udpConcealPipeline() concealPipeline {
+func udpConcealPipeline(
+	framedOpts conceal.FramedOpts,
+	preludeOpts conceal.PreludeOpts,
+	masqueradeOpts conceal.MasqueradeOpts,
+) concealPipeline {
 	stages := make([]concealStage, 0, 3)
-	if hasMasquerade(b.masqueradeOpts) {
+	if hasMasquerade(masqueradeOpts) {
 		stages = append(stages, concealStageMasquerade)
 	}
-	if hasFramed(b.framedOpts) {
+	if hasFramed(framedOpts) {
 		stages = append(stages, concealStageFramed)
 	}
-	if !b.preludeOpts.IsEmpty() {
+	if !preludeOpts.IsEmpty() {
 		stages = append(stages, concealStagePrelude)
 	}
 	return concealPipeline{stages: stages}
+}
+
+func (b *StdNetBind) udpConcealPipeline() concealPipeline {
+	return udpConcealPipeline(b.framedOpts, b.preludeOpts, b.masqueradeOpts)
 }
 
 func (b *StdNetBind) batchConcealPipeline() concealPipeline {

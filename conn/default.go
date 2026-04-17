@@ -8,5 +8,5 @@
 package conn
 
 func NewDefaultBind() Bind {
-	return NewMultibind(NewStdNetBind(), NewBindStream())
+	return NewMultibind(NewConcealBind(NewStdNetBind()), NewBindStream())
 }
