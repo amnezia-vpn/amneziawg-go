@@ -2,7 +2,6 @@ package conceal
 
 import (
 	"crypto/rand"
-	"encoding/binary"
 	"math/big"
 	"net"
 	"sync"
@@ -76,32 +75,25 @@ func NewPreludeUDPConn(
 		rulesArr:  opts.RulesArr,
 		junkCount: opts.Jc,
 		junkGen:   newJunkGenerator(opts.Jmin, opts.Jmax),
-		header:    header,
+		classifier: newPacketClassifier(FramedOpts{
+			H1:           header,
+			HeaderCompat: header != nil,
+		}),
 	}, true
 }
 
 type PreludeUDPConn struct {
 	UDPConn
-	origin    UDPConn
-	pool      *BufferPool
-	rulesArr  [5]Rules
-	junkCount int
-	junkGen   *junkGenerator
-	header    *RangedHeader
+	origin     UDPConn
+	pool       *BufferPool
+	rulesArr   [5]Rules
+	junkCount  int
+	junkGen    *junkGenerator
+	classifier packetClassifier
 }
 
 func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
-	var isInit bool
-	if len(b) >= 4 {
-		typ := binary.LittleEndian.Uint32(b[:4])
-		if c.header != nil {
-			isInit = c.header.Validate(typ)
-		} else {
-			isInit = typ == WireguardMsgInitiationType
-		}
-	}
-
-	if isInit {
+	if c.classifier.MatchesInitiationHeader(b) {
 		buf := c.pool.Get()
 		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(nil),
@@ -248,36 +240,28 @@ func NewPreludeBatchConn(
 		rulesArr:  opts.RulesArr,
 		junkCount: opts.Jc,
 		junkGen:   newJunkGenerator(opts.Jmin, opts.Jmax),
-		header:    header,
+		classifier: newPacketClassifier(FramedOpts{
+			H1:           header,
+			HeaderCompat: header != nil,
+		}),
 	}, true
 }
 
 type PreludeBatchConn struct {
 	BatchConn
-	origin    BatchConn
-	bufPool   *BufferPool
-	msgsPool  *sync.Pool
-	rulesArr  [5]Rules
-	junkCount int
-	junkGen   *junkGenerator
-	header    *RangedHeader
+	origin     BatchConn
+	bufPool    *BufferPool
+	msgsPool   *sync.Pool
+	rulesArr   [5]Rules
+	junkCount  int
+	junkGen    *junkGenerator
+	classifier packetClassifier
 }
 
 func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err error) {
 	var initMsg *ipv4.Message
 	for i := range ms {
-		b := ms[i].Buffers[0]
-
-		var isInit bool
-		if len(b) >= 4 {
-			typ := binary.LittleEndian.Uint32(b[:4])
-			if c.header != nil {
-				isInit = c.header.Validate(typ)
-			} else {
-				isInit = typ == WireguardMsgInitiationType
-			}
-		}
-		if isInit {
+		if c.classifier.MatchesInitiationHeader(ms[i].Buffers[0]) {
 			initMsg = &ms[i]
 		}
 	}
