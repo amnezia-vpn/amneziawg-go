@@ -163,6 +163,74 @@ func TestConcealBindSendAndReceive(t *testing.T) {
 	}
 }
 
+func TestConcealBindReceiveDropsInvalidOnlyBatchAndRetries(t *testing.T) {
+	senderInner := &fakePacketBind{batchSize: 4}
+	sender := newTestConcealBind(t, senderInner)
+
+	endpoint, err := sender.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	initiation := makeInitiationPacket()
+	if err := sender.Send([][]byte{initiation}, endpoint); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	wirePackets := flattenSendCalls(senderInner.sendCalls)
+	if len(wirePackets) != 3 {
+		t.Fatalf("wire packet count = %d, want 3", len(wirePackets))
+	}
+
+	receiverInner := &fakePacketBind{
+		batchSize: 4,
+		recvBatches: []fakeRecvBatch{
+			{
+				packets: wirePackets[:2],
+				eps: []Endpoint{
+					endpoint,
+					endpoint,
+				},
+			},
+			{
+				packets: wirePackets[2:],
+				eps: []Endpoint{
+					endpoint,
+				},
+			},
+		},
+	}
+	receiver := newTestConcealBind(t, receiverInner)
+
+	fns, _, err := receiver.Open(0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	bufs := [][]byte{
+		make([]byte, 256),
+		make([]byte, 256),
+		make([]byte, 256),
+		make([]byte, 256),
+	}
+	sizes := make([]int, 4)
+	eps := make([]Endpoint, 4)
+
+	n, err := fns[0](bufs, sizes, eps)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("received count = %d, want 1", n)
+	}
+	if !bytes.Equal(bufs[0][:sizes[0]], initiation) {
+		t.Fatalf("decoded initiation mismatch after invalid-only retry")
+	}
+	if got := eps[0].DstToString(); got != endpoint.DstToString() {
+		t.Fatalf("endpoint[0] = %q, want %q", got, endpoint.DstToString())
+	}
+}
+
 func TestConcealBindMasqueradePassThroughWithoutRulesOut(t *testing.T) {
 	inner := &fakePacketBind{batchSize: 2}
 	bind := NewConcealBind(inner)
