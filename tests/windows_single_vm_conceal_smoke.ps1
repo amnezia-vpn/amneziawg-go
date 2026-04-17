@@ -586,9 +586,9 @@ function Invoke-ConcealSmoke([string]$SelectedMode) {
         $stdoutA = Get-LogText -Path $procA.StdoutPath
         $stdoutB = Get-LogText -Path $procB.StdoutPath
         if ($SelectedMode -eq "udp") {
-            if (($stdoutA -notmatch 'Failed to receive wrapReceiveFn packet: invalid data') -and
-                ($stdoutB -notmatch 'Failed to receive wrapReceiveFn packet: invalid data')) {
-                throw "Expected at least one UDP decoy/junk invalid-data log entry, but none were observed."
+            if (($stdoutA -match 'Failed to receive .* packet: invalid data') -or
+                ($stdoutB -match 'Failed to receive .* packet: invalid data')) {
+                throw "Unexpected UDP invalid-data log entry observed. UDP decoy/junk datagrams should now be filtered at the bind layer before device logging."
             }
         }
 
