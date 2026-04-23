@@ -2,6 +2,7 @@ package conn
 
 import (
 	"bytes"
+	"encoding/binary"
 	"net"
 	"net/netip"
 	"slices"
@@ -57,6 +58,9 @@ func TestConcealBindNoOpWithoutOpts(t *testing.T) {
 	if len(inner.sendCalls) != 1 {
 		t.Fatalf("send calls = %d, want 1", len(inner.sendCalls))
 	}
+	if got := sendCallBatchLengths(inner.sendCalls); !slices.Equal(got, []int{2}) {
+		t.Fatalf("send batch lengths = %v, want [2]", got)
+	}
 	if got := inner.sendCalls[0].packets; !slices.EqualFunc(got, [][]byte{initiation, transport}, bytes.Equal) {
 		t.Fatalf("sent packets changed on no-op path")
 	}
@@ -84,6 +88,105 @@ func TestConcealBindNoOpWithoutOpts(t *testing.T) {
 	}
 	if !bytes.Equal(bufs[1][:sizes[1]], transport) {
 		t.Fatalf("transport changed on no-op path")
+	}
+}
+
+func TestConcealBindSendBatchesActivePipeline(t *testing.T) {
+	inner := &fakePacketBind{batchSize: 3}
+	bind := NewConcealBind(inner)
+	bind.SetFramedOpts(conceal.FramedOpts{
+		H1: mustHeader(t, "777"),
+		H2: mustHeader(t, "778"),
+		H4: mustHeader(t, "779"),
+	})
+
+	endpoint, err := bind.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	initiation := makeInitiationPacket()
+	transport := makeTransportPacket()
+	response := makeResponsePacket()
+	if err := bind.Send([][]byte{initiation, transport, response}, endpoint); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	if got := sendCallBatchLengths(inner.sendCalls); !slices.Equal(got, []int{3}) {
+		t.Fatalf("send batch lengths = %v, want [3]", got)
+	}
+
+	wirePackets := flattenSendCalls(inner.sendCalls)
+	if len(wirePackets) != 3 {
+		t.Fatalf("wire packet count = %d, want 3", len(wirePackets))
+	}
+	if got := wireHeader(t, wirePackets[0]); got != 777 {
+		t.Fatalf("wire packet 0 header = %d, want 777", got)
+	}
+	if got := wireHeader(t, wirePackets[1]); got != 779 {
+		t.Fatalf("wire packet 1 header = %d, want 779", got)
+	}
+	if got := wireHeader(t, wirePackets[2]); got != 778 {
+		t.Fatalf("wire packet 2 header = %d, want 778", got)
+	}
+}
+
+func TestConcealBindSendBatchesPreludeInWireOrder(t *testing.T) {
+	inner := &fakePacketBind{batchSize: 3}
+	bind := NewConcealBind(inner)
+	bind.SetFramedOpts(conceal.FramedOpts{
+		H1: mustHeader(t, "777"),
+		H4: mustHeader(t, "779"),
+	})
+	bind.SetPreludeOpts(conceal.PreludeOpts{
+		Jc:   1,
+		Jmin: 3,
+		Jmax: 3,
+		RulesArr: [5]conceal.Rules{
+			mustParseRules(t, "<b 0xaabb>"),
+		},
+	})
+
+	endpoint, err := bind.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	firstInitiation := makeInitiationPacket()
+	transport := makeTransportPacket()
+	secondInitiation := makeInitiationPacket()
+	if err := bind.Send([][]byte{firstInitiation, transport, secondInitiation}, endpoint); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	if got := sendCallBatchLengths(inner.sendCalls); !slices.Equal(got, []int{3, 3, 1}) {
+		t.Fatalf("send batch lengths = %v, want [3 3 1]", got)
+	}
+
+	wirePackets := flattenSendCalls(inner.sendCalls)
+	if len(wirePackets) != 7 {
+		t.Fatalf("wire packet count = %d, want 7", len(wirePackets))
+	}
+	if !bytes.Equal(wirePackets[0], []byte{0xaa, 0xbb}) {
+		t.Fatalf("wire packet 0 prelude = %x, want aabb", wirePackets[0])
+	}
+	if len(wirePackets[1]) != 3 {
+		t.Fatalf("wire packet 1 junk len = %d, want 3", len(wirePackets[1]))
+	}
+	if got := wireHeader(t, wirePackets[2]); got != 777 {
+		t.Fatalf("wire packet 2 header = %d, want 777", got)
+	}
+	if got := wireHeader(t, wirePackets[3]); got != 779 {
+		t.Fatalf("wire packet 3 header = %d, want 779", got)
+	}
+	if !bytes.Equal(wirePackets[4], []byte{0xaa, 0xbb}) {
+		t.Fatalf("wire packet 4 prelude = %x, want aabb", wirePackets[4])
+	}
+	if len(wirePackets[5]) != 3 {
+		t.Fatalf("wire packet 5 junk len = %d, want 3", len(wirePackets[5]))
+	}
+	if got := wireHeader(t, wirePackets[6]); got != 777 {
+		t.Fatalf("wire packet 6 header = %d, want 777", got)
 	}
 }
 
@@ -385,6 +488,23 @@ func flattenSendCalls(calls []fakeSendCall) [][]byte {
 		out = append(out, call.packets...)
 	}
 	return out
+}
+
+func sendCallBatchLengths(calls []fakeSendCall) []int {
+	lengths := make([]int, 0, len(calls))
+	for _, call := range calls {
+		lengths = append(lengths, len(call.packets))
+	}
+	return lengths
+}
+
+func wireHeader(t *testing.T, packet []byte) uint32 {
+	t.Helper()
+
+	if len(packet) < 4 {
+		t.Fatalf("wire packet len = %d, want at least 4", len(packet))
+	}
+	return binary.LittleEndian.Uint32(packet[:4])
 }
 
 var _ Bind = (*fakePacketBind)(nil)

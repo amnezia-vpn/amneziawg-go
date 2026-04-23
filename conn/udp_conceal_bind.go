@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"bytes"
 	"sync"
 
 	"github.com/amnezia-vpn/amneziawg-go/conceal"
@@ -126,9 +127,66 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 		return b.inner.Send(bufs, ep)
 	}
 
+	batchSize := b.inner.BatchSize()
+	if batchSize < 1 {
+		batchSize = 1
+	}
+
+	batch := make([][]byte, 0, batchSize)
+	retained := make([][]byte, 0, batchSize)
+
+	putRetained := func() {
+		for i, buf := range retained {
+			b.bufPool.Put(buf)
+			retained[i] = nil
+		}
+		retained = retained[:0]
+	}
+	clearBatch := func() {
+		for i := range batch {
+			batch[i] = nil
+		}
+		batch = batch[:0]
+	}
+	defer func() {
+		putRetained()
+		clearBatch()
+	}()
+
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := b.inner.Send(batch, ep)
+		putRetained()
+		clearBatch()
+		return err
+	}
+
+	appendPacket := func(packet []byte, retainedBuf []byte) error {
+		if len(batch) == batchSize {
+			if err := flush(); err != nil {
+				if retainedBuf != nil {
+					b.bufPool.Put(retainedBuf)
+				}
+				return err
+			}
+		}
+
+		batch = append(batch, packet)
+		if retainedBuf != nil {
+			retained = append(retained, retainedBuf)
+		}
+
+		if len(batch) == batchSize {
+			return flush()
+		}
+		return nil
+	}
+
 	for _, buf := range bufs {
 		if err := pipeline.EmitPrelude(buf, func(packet []byte) error {
-			return b.inner.Send([][]byte{packet}, ep)
+			return appendPacket(bytes.Clone(packet), nil)
 		}); err != nil {
 			return err
 		}
@@ -139,14 +197,12 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 			b.bufPool.Put(encoded)
 			return err
 		}
-		err = b.inner.Send([][]byte{encoded[:n]}, ep)
-		b.bufPool.Put(encoded)
-		if err != nil {
+		if err := appendPacket(encoded[:n], encoded); err != nil {
 			return err
 		}
 	}
 
-	return nil
+	return flush()
 }
 
 func (b *ConcealBind) ParseEndpoint(s string) (Endpoint, error) {
