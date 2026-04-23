@@ -3,6 +3,7 @@ package conn
 import (
 	"bytes"
 	"sync"
+	"sync/atomic"
 
 	"github.com/amnezia-vpn/amneziawg-go/conceal"
 )
@@ -17,7 +18,7 @@ var (
 type ConcealBind struct {
 	inner Bind
 
-	mu sync.RWMutex
+	mu sync.Mutex
 
 	bufPool sync.Pool
 
@@ -25,7 +26,7 @@ type ConcealBind struct {
 	preludeOpts    conceal.PreludeOpts
 	masqueradeOpts conceal.MasqueradeOpts
 
-	pipeline *conceal.UDPDatagramPipeline
+	pipeline atomic.Pointer[conceal.UDPDatagramPipeline]
 }
 
 func NewConcealBind(inner Bind) *ConcealBind {
@@ -42,18 +43,16 @@ func NewConcealBind(inner Bind) *ConcealBind {
 }
 
 func (b *ConcealBind) rebuildPipelineLocked() {
-	b.pipeline = conceal.NewUDPDatagramPipeline(&b.bufPool, b.framedOpts, b.preludeOpts, b.masqueradeOpts)
+	b.pipeline.Store(conceal.NewUDPDatagramPipeline(&b.bufPool, b.framedOpts, b.preludeOpts, b.masqueradeOpts))
 }
 
 func (b *ConcealBind) currentPipeline() *conceal.UDPDatagramPipeline {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.pipeline
+	return b.pipeline.Load()
 }
 
 func (b *ConcealBind) udpConcealPipeline() concealPipeline {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return udpConcealPipeline(b.framedOpts, b.preludeOpts, b.masqueradeOpts)
 }
 
@@ -73,43 +72,36 @@ func (b *ConcealBind) Open(port uint16) ([]ReceiveFunc, uint16, error) {
 
 func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 	return func(packets [][]byte, sizes []int, eps []Endpoint) (int, error) {
-		for {
-			n, err := fn(packets, sizes, eps)
-			if err != nil {
-				return 0, err
-			}
-			if n == 0 {
-				return 0, nil
-			}
-
-			pipeline := b.currentPipeline()
-			if pipeline == nil || !pipeline.Active() {
-				return n, nil
-			}
-
-			out := 0
-			for i := 0; i < n; i++ {
-				if sizes[i] == 0 || eps[i] == nil {
-					continue
-				}
-
-				size, ok := pipeline.DecodeInPlace(packets[i], sizes[i])
-				if !ok {
-					continue
-				}
-
-				if out != i {
-					copy(packets[out], packets[i][:size])
-					eps[out] = eps[i]
-				}
-				sizes[out] = size
-				out++
-			}
-
-			if out > 0 {
-				return out, nil
-			}
+		n, err := fn(packets, sizes, eps)
+		if err != nil {
+			return 0, err
 		}
+		if n == 0 {
+			return 0, nil
+		}
+
+		pipeline := b.currentPipeline()
+		if pipeline == nil || !pipeline.Active() {
+			return n, nil
+		}
+
+		for i := 0; i < n; i++ {
+			if sizes[i] == 0 || eps[i] == nil {
+				sizes[i] = 0
+				eps[i] = nil
+				continue
+			}
+
+			size, ok := pipeline.DecodeInPlace(packets[i], sizes[i])
+			if !ok {
+				sizes[i] = 0
+				eps[i] = nil
+				continue
+			}
+
+			sizes[i] = size
+		}
+		return n, nil
 	}
 }
 

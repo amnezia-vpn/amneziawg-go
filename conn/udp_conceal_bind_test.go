@@ -249,24 +249,99 @@ func TestConcealBindSendAndReceive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
+	if n != 4 {
+		t.Fatalf("received count = %d, want 4", n)
+	}
+	if got := sizes[:n]; !slices.Equal(got, []int{0, 0, len(initiation), len(transport)}) {
+		t.Fatalf("sizes = %v, want [0 0 %d %d]", got, len(initiation), len(transport))
+	}
+	if eps[0] != nil || eps[1] != nil {
+		t.Fatalf("dropped endpoints = %v %v, want nil nil", eps[0], eps[1])
+	}
+	if !bytes.Equal(bufs[2][:sizes[2]], initiation) {
+		t.Fatalf("decoded initiation mismatch")
+	}
+	if !bytes.Equal(bufs[3][:sizes[3]], transport) {
+		t.Fatalf("decoded transport mismatch")
+	}
+	if got := eps[2].DstToString(); got != endpoint.DstToString() {
+		t.Fatalf("endpoint[2] = %q, want %q", got, endpoint.DstToString())
+	}
+	if got := eps[3].DstToString(); got != endpoint.DstToString() {
+		t.Fatalf("endpoint[3] = %q, want %q", got, endpoint.DstToString())
+	}
+}
+
+func TestConcealBindReceivePreservesIndicesForMixedBatch(t *testing.T) {
+	senderInner := &fakePacketBind{batchSize: 4}
+	sender := newTestConcealBind(t, senderInner)
+
+	endpoint, err := sender.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	initiation := makeInitiationPacket()
+	if err := sender.Send([][]byte{initiation}, endpoint); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	wirePackets := flattenSendCalls(senderInner.sendCalls)
+	if len(wirePackets) != 3 {
+		t.Fatalf("wire packet count = %d, want 3", len(wirePackets))
+	}
+
+	receiverInner := &fakePacketBind{
+		batchSize: 4,
+		recvBatches: []fakeRecvBatch{
+			{
+				packets: [][]byte{wirePackets[0], wirePackets[2]},
+				eps: []Endpoint{
+					endpoint,
+					endpoint,
+				},
+			},
+		},
+	}
+	receiver := newTestConcealBind(t, receiverInner)
+
+	fns, _, err := receiver.Open(0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	bufs := [][]byte{
+		make([]byte, 256),
+		make([]byte, 256),
+	}
+	sizes := make([]int, 2)
+	eps := make([]Endpoint, 2)
+
+	n, err := fns[0](bufs, sizes, eps)
+	if err != nil {
+		t.Fatalf("receive: %v", err)
+	}
 	if n != 2 {
 		t.Fatalf("received count = %d, want 2", n)
 	}
-	if !bytes.Equal(bufs[0][:sizes[0]], initiation) {
-		t.Fatalf("decoded initiation mismatch")
+	if got := sizes[:n]; !slices.Equal(got, []int{0, len(initiation)}) {
+		t.Fatalf("sizes = %v, want [0 %d]", got, len(initiation))
 	}
-	if !bytes.Equal(bufs[1][:sizes[1]], transport) {
-		t.Fatalf("decoded transport mismatch")
+	if eps[0] != nil {
+		t.Fatalf("endpoint[0] = %v, want nil", eps[0])
 	}
-	if got := eps[0].DstToString(); got != endpoint.DstToString() {
-		t.Fatalf("endpoint[0] = %q, want %q", got, endpoint.DstToString())
+	if !bytes.Equal(bufs[0][:len(wirePackets[0])], wirePackets[0]) {
+		t.Fatalf("slot 0 packet bytes changed unexpectedly")
+	}
+	if !bytes.Equal(bufs[1][:sizes[1]], initiation) {
+		t.Fatalf("decoded initiation was not left in slot 1")
 	}
 	if got := eps[1].DstToString(); got != endpoint.DstToString() {
 		t.Fatalf("endpoint[1] = %q, want %q", got, endpoint.DstToString())
 	}
 }
 
-func TestConcealBindReceiveDropsInvalidOnlyBatchAndRetries(t *testing.T) {
+func TestConcealBindReceiveInvalidOnlyBatchReturnsZeroSizesWithoutRetry(t *testing.T) {
 	senderInner := &fakePacketBind{batchSize: 4}
 	sender := newTestConcealBind(t, senderInner)
 
@@ -323,11 +398,28 @@ func TestConcealBindReceiveDropsInvalidOnlyBatchAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("receive: %v", err)
 	}
+	if n != 2 {
+		t.Fatalf("received count = %d, want 2", n)
+	}
+	if receiverInner.recvCalls != 1 {
+		t.Fatalf("inner receive calls = %d, want 1", receiverInner.recvCalls)
+	}
+	if got := sizes[:n]; !slices.Equal(got, []int{0, 0}) {
+		t.Fatalf("sizes = %v, want [0 0]", got)
+	}
+	if eps[0] != nil || eps[1] != nil {
+		t.Fatalf("dropped endpoints = %v %v, want nil nil", eps[0], eps[1])
+	}
+
+	n, err = fns[0](bufs, sizes, eps)
+	if err != nil {
+		t.Fatalf("second receive: %v", err)
+	}
 	if n != 1 {
-		t.Fatalf("received count = %d, want 1", n)
+		t.Fatalf("second received count = %d, want 1", n)
 	}
 	if !bytes.Equal(bufs[0][:sizes[0]], initiation) {
-		t.Fatalf("decoded initiation mismatch after invalid-only retry")
+		t.Fatalf("decoded initiation mismatch on second receive")
 	}
 	if got := eps[0].DstToString(); got != endpoint.DstToString() {
 		t.Fatalf("endpoint[0] = %q, want %q", got, endpoint.DstToString())
@@ -387,6 +479,7 @@ type fakePacketBind struct {
 	batchSize   int
 	recvBatches []fakeRecvBatch
 	sendCalls   []fakeSendCall
+	recvCalls   int
 	openCalls   int
 	closeCalls  int
 }
@@ -407,6 +500,7 @@ func (b *fakePacketBind) Open(port uint16) ([]ReceiveFunc, uint16, error) {
 	idx := 0
 	return []ReceiveFunc{
 		func(packets [][]byte, sizes []int, eps []Endpoint) (int, error) {
+			b.recvCalls++
 			if idx >= len(b.recvBatches) {
 				return 0, net.ErrClosed
 			}
