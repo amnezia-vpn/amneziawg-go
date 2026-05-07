@@ -2,6 +2,8 @@ package conn
 
 import (
 	"bytes"
+	"errors"
+	"net"
 	"sync"
 	"sync/atomic"
 
@@ -13,6 +15,7 @@ var (
 	_ Framable      = (*ConcealBind)(nil)
 	_ Preludable    = (*ConcealBind)(nil)
 	_ Masqueradable = (*ConcealBind)(nil)
+	_ Fallbackable  = (*ConcealBind)(nil)
 )
 
 type ConcealBind struct {
@@ -25,6 +28,9 @@ type ConcealBind struct {
 	framedOpts     conceal.FramedOpts
 	preludeOpts    conceal.PreludeOpts
 	masqueradeOpts conceal.MasqueradeOpts
+	fallbackPort   uint16
+
+	fallbackSessions map[string]*concealBindFallbackSession
 
 	pipeline atomic.Pointer[conceal.UDPDatagramPipeline]
 }
@@ -92,8 +98,15 @@ func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 				continue
 			}
 
-			size, ok := pipeline.DecodeInPlace(packets[i], sizes[i])
-			if !ok {
+			size, err := pipeline.DecodeInPlaceErr(packets[i], sizes[i])
+			if err != nil {
+				if errors.Is(err, conceal.ErrFormat) {
+					data := conceal.FormatErrorData(err)
+					if len(data) == 0 {
+						data = bytes.Clone(packets[i][:sizes[i]])
+					}
+					_ = b.forwardFallbackUDP(eps[i], data)
+				}
 				sizes[i] = 0
 				eps[i] = nil
 				continue
@@ -106,6 +119,9 @@ func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 }
 
 func (b *ConcealBind) Close() error {
+	b.mu.Lock()
+	b.closeFallbackSessionsLocked()
+	b.mu.Unlock()
 	return b.inner.Close()
 }
 
@@ -227,4 +243,128 @@ func (b *ConcealBind) SetMasqueradeOpts(opts conceal.MasqueradeOpts) {
 
 	b.masqueradeOpts = opts
 	b.rebuildPipelineLocked()
+}
+
+func (b *ConcealBind) SetFallbackPort(port uint16) {
+	b.mu.Lock()
+	if b.fallbackPort != port {
+		b.closeFallbackSessionsLocked()
+	}
+	b.fallbackPort = port
+	b.mu.Unlock()
+
+	if fallbackable, ok := b.inner.(Fallbackable); ok {
+		fallbackable.SetFallbackPort(port)
+	}
+}
+
+func (b *ConcealBind) forwardFallbackUDP(ep Endpoint, data []byte) error {
+	if ep == nil || len(data) == 0 {
+		return nil
+	}
+
+	port := b.currentFallbackPort()
+	if port == 0 {
+		return nil
+	}
+
+	session, err := b.fallbackSession(ep, port)
+	if err != nil {
+		return err
+	}
+	_, err = session.conn.Write(data)
+	return err
+}
+
+func (b *ConcealBind) currentFallbackPort() uint16 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fallbackPort
+}
+
+func (b *ConcealBind) fallbackSession(ep Endpoint, port uint16) (*concealBindFallbackSession, error) {
+	key := ep.DstToString()
+
+	b.mu.Lock()
+	if session := b.fallbackSessions[key]; session != nil {
+		b.mu.Unlock()
+		return session, nil
+	}
+	b.mu.Unlock()
+
+	fallbackConn, err := net.DialUDP("udp", nil, fallbackUDPAddressForEndpoint(ep, port))
+	if err != nil {
+		return nil, err
+	}
+
+	session := &concealBindFallbackSession{
+		parent: b,
+		key:    key,
+		ep:     ep,
+		conn:   fallbackConn,
+	}
+
+	b.mu.Lock()
+	if b.fallbackPort != port || b.fallbackPort == 0 {
+		b.mu.Unlock()
+		fallbackConn.Close()
+		return nil, net.ErrClosed
+	}
+	if b.fallbackSessions == nil {
+		b.fallbackSessions = make(map[string]*concealBindFallbackSession)
+	}
+	if existing := b.fallbackSessions[key]; existing != nil {
+		b.mu.Unlock()
+		fallbackConn.Close()
+		return existing, nil
+	}
+	b.fallbackSessions[key] = session
+	b.mu.Unlock()
+
+	go session.relay()
+	return session, nil
+}
+
+func (b *ConcealBind) removeFallbackSession(key string, session *concealBindFallbackSession) {
+	b.mu.Lock()
+	if b.fallbackSessions[key] == session {
+		delete(b.fallbackSessions, key)
+	}
+	b.mu.Unlock()
+}
+
+func (b *ConcealBind) closeFallbackSessionsLocked() {
+	for key, session := range b.fallbackSessions {
+		session.close()
+		delete(b.fallbackSessions, key)
+	}
+}
+
+type concealBindFallbackSession struct {
+	parent *ConcealBind
+	key    string
+	ep     Endpoint
+	conn   *net.UDPConn
+	once   sync.Once
+}
+
+func (s *concealBindFallbackSession) relay() {
+	defer s.parent.removeFallbackSession(s.key, s)
+
+	buf := make([]byte, 65535)
+	for {
+		n, err := s.conn.Read(buf)
+		if err != nil {
+			return
+		}
+		if err := s.parent.inner.Send([][]byte{buf[:n]}, s.ep); err != nil {
+			return
+		}
+	}
+}
+
+func (s *concealBindFallbackSession) close() {
+	s.once.Do(func() {
+		s.conn.Close()
+	})
 }

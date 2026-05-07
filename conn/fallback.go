@@ -27,6 +27,14 @@ func fallbackUDPAddress(addr net.Addr, port uint16) *net.UDPAddr {
 	return &net.UDPAddr{IP: ip, Port: int(port)}
 }
 
+func fallbackUDPAddressForEndpoint(ep Endpoint, port uint16) *net.UDPAddr {
+	ip := net.IPv4(127, 0, 0, 1)
+	if ep != nil && ep.DstIP().Is6() {
+		ip = net.IPv6loopback
+	}
+	return &net.UDPAddr{IP: ip, Port: int(port)}
+}
+
 func (b *BindStream) proxyStreamFallback(ep *streamEndpoint, first []byte) {
 	rawConn := ep.rawConn
 	if rawConn == nil {

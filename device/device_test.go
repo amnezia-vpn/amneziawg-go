@@ -181,13 +181,23 @@ func (pair *testPair) Send(
 	done chan struct{},
 ) {
 	tb.Helper()
+	pair.SendPacket(tb, ping, tuntest.Ping, done)
+}
+
+func (pair *testPair) SendPacket(
+	tb testing.TB,
+	ping SendDirection,
+	packet func(dst, src netip.Addr) []byte,
+	done chan struct{},
+) {
+	tb.Helper()
 	p0, p1 := pair[0], pair[1]
 	if !ping {
 		// pong is the new ping
 		p0, p1 = p1, p0
 	}
 
-	msg := tuntest.Ping(p0.ip, p1.ip)
+	msg := packet(p0.ip, p1.ip)
 	p1.tun.Outbound <- msg
 	timer := time.NewTimer(6 * time.Second)
 	defer timer.Stop()
@@ -379,6 +389,208 @@ func TestAWGDevicePingTCPConceal(t *testing.T) {
 	t.Run("ping 1.0.0.2", func(t *testing.T) {
 		pair.Send(t, Pong, nil)
 	})
+}
+
+func TestAWGDeviceUDPMasqueradeTransportsTUNTCPAndUDP(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPair(t, true,
+		"format_in", "<b 0xfeed><dz be 2><d>",
+		"format_out", "<b 0xfeed><dz be 2><d>",
+	)
+
+	for _, tc := range []struct {
+		name   string
+		packet func(dst, src netip.Addr) []byte
+	}{
+		{name: "udp", packet: tuntest.UDP},
+		{name: "tcp", packet: tuntest.TCP},
+	} {
+		t.Run(tc.name+"_ping", func(t *testing.T) {
+			pair.SendPacket(t, Ping, tc.packet, nil)
+		})
+		t.Run(tc.name+"_pong", func(t *testing.T) {
+			pair.SendPacket(t, Pong, tc.packet, nil)
+		})
+	}
+}
+
+func TestAWGDeviceTCPMasqueradeTransportsTUNTCPAndUDP(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPairTCP(t,
+		"network", "tcp",
+		"format_in", "<b 0xfeed><dz be 2><d>",
+		"format_out", "<b 0xfeed><dz be 2><d>",
+	)
+
+	for _, tc := range []struct {
+		name   string
+		packet func(dst, src netip.Addr) []byte
+	}{
+		{name: "udp", packet: tuntest.UDP},
+		{name: "tcp", packet: tuntest.TCP},
+	} {
+		t.Run(tc.name+"_ping", func(t *testing.T) {
+			pair.SendPacket(t, Ping, tc.packet, nil)
+		})
+		t.Run(tc.name+"_pong", func(t *testing.T) {
+			pair.SendPacket(t, Pong, tc.packet, nil)
+		})
+	}
+}
+
+func TestAWGDeviceTCPFallbackWithTUNDevice(t *testing.T) {
+	fallbackListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen fallback: %v", err)
+	}
+	defer fallbackListener.Close()
+
+	probe := []byte("GET / HTTP/1.1\r\n")
+	response := []byte("HTTP/1.1 200 OK\r\n\r\n")
+	received := make(chan []byte, 1)
+	served := make(chan error, 1)
+	go func() {
+		conn, err := fallbackListener.Accept()
+		if err != nil {
+			served <- err
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, len(probe))
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			served <- err
+			return
+		}
+		received <- bytes.Clone(buf)
+		_, err = conn.Write(response)
+		served <- err
+	}()
+
+	device := newFallbackTestDevice(t,
+		"tcp",
+		getFreeTCPPort(t),
+		fallbackListener.Addr().(*net.TCPAddr).Port,
+	)
+
+	client, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(device.net.port))))
+	if err != nil {
+		t.Fatalf("dial device: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set client deadline: %v", err)
+	}
+	if _, err := client.Write(probe); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+
+	got := make([]byte, len(response))
+	if _, err := io.ReadFull(client, got); err != nil {
+		t.Fatalf("read fallback response: %v", err)
+	}
+	if !bytes.Equal(got, response) {
+		t.Fatalf("fallback response = %q, want %q", got, response)
+	}
+
+	client.Close()
+	assertFallbackReceived(t, received, served, probe)
+}
+
+func TestAWGDeviceUDPFallbackWithTUNDevice(t *testing.T) {
+	fallbackConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen fallback udp: %v", err)
+	}
+	defer fallbackConn.Close()
+
+	probe := []byte("GE")
+	response := []byte("udp-ok")
+	received := make(chan []byte, 1)
+	served := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, addr, err := fallbackConn.ReadFromUDP(buf)
+		if err != nil {
+			served <- err
+			return
+		}
+		received <- bytes.Clone(buf[:n])
+		_, err = fallbackConn.WriteToUDP(response, addr)
+		served <- err
+	}()
+
+	device := newFallbackTestDevice(t, "udp", 0, fallbackConn.LocalAddr().(*net.UDPAddr).Port)
+
+	client, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(device.net.port)})
+	if err != nil {
+		t.Fatalf("dial device udp: %v", err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set udp client deadline: %v", err)
+	}
+	if _, err := client.Write(probe); err != nil {
+		t.Fatalf("write udp probe: %v", err)
+	}
+
+	got := make([]byte, len(response))
+	if _, err := io.ReadFull(client, got); err != nil {
+		t.Fatalf("read udp fallback response: %v", err)
+	}
+	if !bytes.Equal(got, response) {
+		t.Fatalf("udp fallback response = %q, want %q", got, response)
+	}
+
+	assertFallbackReceived(t, received, served, probe)
+}
+
+func newFallbackTestDevice(t *testing.T, network string, listenPort, fallbackPort int) *Device {
+	t.Helper()
+
+	var key NoisePrivateKey
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatalf("generate private key: %v", err)
+	}
+
+	tunDevice := tuntest.NewChannelTUN()
+	device := NewDevice(tunDevice.TUN(), conn.NewDefaultBind(), NewLogger(LogLevelError, "fallback-test: "))
+	cfg := uapiCfg(
+		"private_key", hex.EncodeToString(key[:]),
+		"listen_port", strconv.Itoa(listenPort),
+		"network", network,
+		"format_in", "<b 0xfeed><dz be 2><d>",
+		"fallback_port", strconv.Itoa(fallbackPort),
+	)
+	if err := device.IpcSet(cfg); err != nil {
+		device.Close()
+		t.Fatalf("configure fallback device: %v", err)
+	}
+	if err := device.Up(); err != nil {
+		device.Close()
+		t.Fatalf("bring up fallback device: %v", err)
+	}
+	t.Cleanup(device.Close)
+	return device
+}
+
+func assertFallbackReceived(t *testing.T, received <-chan []byte, served <-chan error, want []byte) {
+	t.Helper()
+
+	select {
+	case got := <-received:
+		if !bytes.Equal(got, want) {
+			t.Fatalf("fallback received = %q, want %q", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fallback service did not receive probe")
+	}
+
+	if err := <-served; err != nil {
+		t.Fatalf("fallback service failed: %v", err)
+	}
 }
 
 // Needs to be stopped with Ctrl-C

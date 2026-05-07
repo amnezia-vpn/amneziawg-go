@@ -25,6 +25,48 @@ func Ping(dst, src netip.Addr) []byte {
 	return genICMPv4(payload, dst, src)
 }
 
+func UDP(dst, src netip.Addr) []byte {
+	payload := []byte("tuntest-udp")
+	const (
+		udpProtocolNumber = 17
+		ipv4Size          = 20
+		udpSize           = 8
+	)
+
+	pkt := make([]byte, ipv4Size+udpSize+len(payload))
+	udp := pkt[ipv4Size : ipv4Size+udpSize]
+	binary.BigEndian.PutUint16(udp[0:], 1337)
+	binary.BigEndian.PutUint16(udp[2:], 7331)
+	binary.BigEndian.PutUint16(udp[4:], uint16(udpSize+len(payload)))
+	copy(pkt[ipv4Size+udpSize:], payload)
+
+	fillIPv4Header(pkt[:ipv4Size], dst, src, udpProtocolNumber, len(pkt))
+	return pkt
+}
+
+func TCP(dst, src netip.Addr) []byte {
+	payload := []byte("tuntest-tcp")
+	const (
+		tcpProtocolNumber = 6
+		ipv4Size          = 20
+		tcpSize           = 20
+	)
+
+	pkt := make([]byte, ipv4Size+tcpSize+len(payload))
+	tcp := pkt[ipv4Size : ipv4Size+tcpSize]
+	binary.BigEndian.PutUint16(tcp[0:], 1337)
+	binary.BigEndian.PutUint16(tcp[2:], 7331)
+	binary.BigEndian.PutUint32(tcp[4:], 1)
+	binary.BigEndian.PutUint32(tcp[8:], 1)
+	tcp[12] = tcpSize / 4 << 4
+	tcp[13] = 0x18 // PSH|ACK
+	binary.BigEndian.PutUint16(tcp[14:], 65535)
+	copy(pkt[ipv4Size+tcpSize:], payload)
+
+	fillIPv4Header(pkt[:ipv4Size], dst, src, tcpProtocolNumber, len(pkt))
+	return pkt
+}
+
 // Checksum is the "internet checksum" from https://tools.ietf.org/html/rfc1071.
 func checksum(buf []byte, initial uint16) uint16 {
 	v := uint32(initial)
@@ -77,6 +119,24 @@ func genICMPv4(payload []byte, dst, src netip.Addr) []byte {
 
 	copy(pkt[headerSize:], payload)
 	return pkt
+}
+
+func fillIPv4Header(ip []byte, dst, src netip.Addr, protocol, length int) {
+	const (
+		ipv4Size           = 20
+		ipv4TotalLenOffset = 2
+		ipv4ChecksumOffset = 10
+		ttl                = 65
+	)
+
+	ip[0] = (4 << 4) | (ipv4Size / 4)
+	binary.BigEndian.PutUint16(ip[ipv4TotalLenOffset:], uint16(length))
+	ip[8] = ttl
+	ip[9] = byte(protocol)
+	copy(ip[12:], src.AsSlice())
+	copy(ip[16:], dst.AsSlice())
+	chksum := ^checksum(ip[:], 0)
+	binary.BigEndian.PutUint16(ip[ipv4ChecksumOffset:], chksum)
 }
 
 type ChannelTUN struct {
