@@ -2,6 +2,7 @@ package conceal
 
 import (
 	"encoding/binary"
+	"errors"
 	"sync"
 )
 
@@ -85,11 +86,19 @@ func (p *UDPDatagramPipeline) Encode(dst, src []byte) (int, error) {
 }
 
 func (p *UDPDatagramPipeline) DecodeInPlace(buf []byte, n int) (int, bool) {
+	n, err := p.DecodeInPlaceErr(buf, n)
+	return n, err == nil
+}
+
+func (p *UDPDatagramPipeline) DecodeInPlaceErr(buf []byte, n int) (int, error) {
 	if p.masqueradeActive {
 		var err error
 		n, err = p.masquerade.DecodeInPlace(buf, n)
 		if err != nil {
-			return 0, false
+			if !errors.Is(err, ErrFormat) {
+				err = NewFormatError(buf[:n], err)
+			}
+			return 0, err
 		}
 	}
 
@@ -97,15 +106,15 @@ func (p *UDPDatagramPipeline) DecodeInPlace(buf []byte, n int) (int, bool) {
 		var err error
 		n, err = p.framing.Decode(buf[:n])
 		if err != nil {
-			return 0, false
+			return 0, err
 		}
 	}
 
 	if !p.classifier.IsValid(buf[:n]) {
-		return 0, false
+		return 0, NewFormatError(buf[:n], errInvalidData)
 	}
 
-	return n, true
+	return n, nil
 }
 
 func (p *UDPDatagramPipeline) EmitPrelude(packet []byte, emit func([]byte) error) error {
