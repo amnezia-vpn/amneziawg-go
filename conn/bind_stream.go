@@ -2,6 +2,7 @@ package conn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ var (
 	_ Framable      = (*BindStream)(nil)
 	_ Preludable    = (*BindStream)(nil)
 	_ Masqueradable = (*BindStream)(nil)
+	_ Fallbackable  = (*BindStream)(nil)
 )
 
 type streamPacketQueue struct {
@@ -54,6 +56,7 @@ type BindStream struct {
 	framedOpts     conceal.FramedOpts
 	preludeOpts    conceal.PreludeOpts
 	masqueradeOpts conceal.MasqueradeOpts
+	fallbackPort   uint16
 }
 
 func (b *BindStream) readFaucet() ReceiveFunc {
@@ -81,6 +84,11 @@ func (b *BindStream) readStream(ep *streamEndpoint) {
 		sp := b.streamPacketPool.Get().(*streamPacketQueue)
 		n, err := ep.conn.Read(sp.buf[:])
 		if err != nil {
+			b.streamPacketPool.Put(sp)
+			if b.fallbackPort != 0 && errors.Is(err, conceal.ErrFormat) {
+				b.proxyStreamFallback(ep, conceal.FormatErrorData(err))
+				return
+			}
 			ep.Close()
 			return
 		}
@@ -100,19 +108,19 @@ func (b *BindStream) accept(listener net.Listener) {
 		default:
 		}
 
-		conn, err := listener.Accept()
+		rawConn, err := listener.Accept()
 		if err != nil {
 			// log this error somewhere
 			break
 		}
-		conn = b.upgradeConn(conn)
+		conn := b.upgradeConn(rawConn)
 
 		b.wg.Add(1)
-		go b.handleAccepted(conn)
+		go b.handleAccepted(rawConn, conn)
 	}
 }
 
-func (b *BindStream) handleAccepted(conn net.Conn) {
+func (b *BindStream) handleAccepted(rawConn, conn net.Conn) {
 	defer b.wg.Done()
 
 	ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
@@ -121,8 +129,9 @@ func (b *BindStream) handleAccepted(conn net.Conn) {
 	}
 
 	ep := &streamEndpoint{
-		conn: conn,
-		dst:  ap,
+		conn:    conn,
+		rawConn: rawConn,
+		dst:     ap,
 	}
 
 	b.wg.Add(1)
@@ -140,13 +149,14 @@ func (b *BindStream) dial(ep *streamEndpoint) error {
 		return nil
 	}
 
-	conn, err := b.dialer.DialContext(b.ctx, "tcp", ep.DstToString())
+	rawConn, err := b.dialer.DialContext(b.ctx, "tcp", ep.DstToString())
 	if err != nil {
 		return fmt.Errorf("failed to dial context: %v", err)
 	}
 
-	conn = b.upgradeConn(conn)
+	conn := b.upgradeConn(rawConn)
 	ep.conn = conn
+	ep.rawConn = rawConn
 
 	b.wg.Add(1)
 	go func() {
@@ -256,7 +266,8 @@ func (b *BindStream) BatchSize() int {
 var _ Endpoint = (*streamEndpoint)(nil)
 
 type streamEndpoint struct {
-	conn net.Conn
+	conn    net.Conn
+	rawConn net.Conn
 
 	dst   netip.AddrPort
 	mutex sync.Mutex
@@ -269,6 +280,10 @@ func (e *streamEndpoint) Close() {
 	if e.conn != nil {
 		e.conn.Close()
 		e.conn = nil
+	}
+	if e.rawConn != nil {
+		e.rawConn.Close()
+		e.rawConn = nil
 	}
 }
 

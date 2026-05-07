@@ -3,6 +3,7 @@ package conn
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"slices"
 	"sync"
@@ -228,7 +229,7 @@ func TestBindStreamTCPPreludeDropsInjectedDecoysOnRead(t *testing.T) {
 	}
 }
 
-func TestBindStreamTCPPreludeDropsLeadingInvalidRecords(t *testing.T) {
+func TestBindStreamTCPPreludeRejectsLeadingUnknownRecords(t *testing.T) {
 	senderRaw, receiverRaw := net.Pipe()
 	defer senderRaw.Close()
 	defer receiverRaw.Close()
@@ -239,29 +240,16 @@ func TestBindStreamTCPPreludeDropsLeadingInvalidRecords(t *testing.T) {
 	recordWriter := mustRecordConn(t, senderRaw, &bind.bufferPool, conceal.MasqueradeOpts{
 		RulesOut: mustParseRules(t, "<dz be 2><d>"),
 	})
-	framedWriter, ok := conceal.NewFramedConn(recordWriter, &bind.bufferPool, bind.framedOpts)
-	if !ok {
-		t.Fatal("expected framed writer")
-	}
 
-	initiation := makeInitiationPacket()
 	writeErr := make(chan error, 1)
 	go func() {
-		if _, err := recordWriter.WriteRecord([]byte{0xde, 0xad}); err != nil {
-			writeErr <- err
-			return
-		}
-		if _, err := recordWriter.WriteRecord([]byte{0xbe, 0xef, 0x01}); err != nil {
-			writeErr <- err
-			return
-		}
-		_, err := framedWriter.Write(initiation)
+		_, err := recordWriter.WriteRecord([]byte{0xde, 0xad})
 		writeErr <- err
 	}()
 
-	got := readPacket(t, receiver, len(initiation))
-	if !bytes.Equal(got, initiation) {
-		t.Fatalf("read-side did not recover after invalid leading records")
+	buf := make([]byte, 16)
+	if _, err := receiver.Read(buf); !errors.Is(err, conceal.ErrFormat) {
+		t.Fatalf("receiver error = %v, want ErrFormat", err)
 	}
 
 	if err := <-writeErr; err != nil {

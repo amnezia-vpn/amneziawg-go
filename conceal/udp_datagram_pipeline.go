@@ -94,7 +94,11 @@ func (p *UDPDatagramPipeline) DecodeInPlace(buf []byte, n int) (int, bool) {
 	}
 
 	if p.framingActive {
-		n = p.framing.Decode(buf[:n])
+		var err error
+		n, err = p.framing.Decode(buf[:n])
+		if err != nil {
+			return 0, false
+		}
 	}
 
 	if !p.classifier.IsValid(buf[:n]) {

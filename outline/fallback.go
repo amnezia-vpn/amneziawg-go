@@ -16,27 +16,28 @@ import (
 )
 
 type DeviceConfig struct {
-	PrivateKey string       `yaml:"private_key"`
-	Address    []string     `yaml:"address"`
-	Dns        []string     `yaml:"dns"`
-	Mtu        int          `yaml:"mtu,omitempty"`
-	Jc         int          `yaml:"jc,omitempty"`
-	Jmin       int          `yaml:"jmin,omitempty"`
-	Jmax       int          `yaml:"jmax,omitempty"`
-	S1         int          `yaml:"s1,omitempty"`
-	S2         int          `yaml:"s2,omitempty"`
-	S3         int          `yaml:"s3,omitempty"`
-	S4         int          `yaml:"s4,omitempty"`
-	H1         string       `yaml:"h1,omitempty"`
-	H2         string       `yaml:"h2,omitempty"`
-	H3         string       `yaml:"h3,omitempty"`
-	H4         string       `yaml:"h4,omitempty"`
-	I1         string       `yaml:"i1,omitempty"`
-	I2         string       `yaml:"i2,omitempty"`
-	I3         string       `yaml:"i3,omitempty"`
-	I4         string       `yaml:"i4,omitempty"`
-	I5         string       `yaml:"i5,omitempty"`
-	Peers      []PeerConfig `yaml:"peers,omitempty"`
+	PrivateKey   string       `yaml:"private_key"`
+	Address      []string     `yaml:"address"`
+	Dns          []string     `yaml:"dns"`
+	Mtu          int          `yaml:"mtu,omitempty"`
+	Jc           int          `yaml:"jc,omitempty"`
+	Jmin         int          `yaml:"jmin,omitempty"`
+	Jmax         int          `yaml:"jmax,omitempty"`
+	S1           int          `yaml:"s1,omitempty"`
+	S2           int          `yaml:"s2,omitempty"`
+	S3           int          `yaml:"s3,omitempty"`
+	S4           int          `yaml:"s4,omitempty"`
+	H1           string       `yaml:"h1,omitempty"`
+	H2           string       `yaml:"h2,omitempty"`
+	H3           string       `yaml:"h3,omitempty"`
+	H4           string       `yaml:"h4,omitempty"`
+	I1           string       `yaml:"i1,omitempty"`
+	I2           string       `yaml:"i2,omitempty"`
+	I3           string       `yaml:"i3,omitempty"`
+	I4           string       `yaml:"i4,omitempty"`
+	I5           string       `yaml:"i5,omitempty"`
+	FallbackPort int          `yaml:"fallback_port,omitempty"`
+	Peers        []PeerConfig `yaml:"peers,omitempty"`
 }
 
 type PeerConfig struct {
@@ -135,6 +136,10 @@ func genIpcString(cfg *DeviceConfig) (string, error) {
 	if cfg.I5 != "" {
 		b.WriteString("\ni5=")
 		b.WriteString(cfg.I5)
+	}
+	if cfg.FallbackPort != 0 {
+		b.WriteString("\nfallback_port=")
+		b.WriteString(strconv.Itoa(cfg.FallbackPort))
 	}
 
 	for _, peer := range cfg.Peers {

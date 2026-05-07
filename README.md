@@ -117,6 +117,13 @@ Value as a tag-sequence, as described in Tag format paragraph
 > [!NOTE]
 > Although it is not required, `Network = tcp` would highly-likely require `FormatIn` and `FormatOut` parameters since stream connection does not have fixed-sized messages
 
+### Fallback
+
+**`FallbackPort: int`**
+- A local fallback service port in range `1-65535`.
+- If configured and incoming data does not match the configured AWG/conceal formats, AWG proxies that TCP stream or UDP sender to a loopback service on `FallbackPort` and relays the response back to the original sender.
+- Absence means fallback is disabled.
+
 ### Message format
 
 **`FormatIn: string of tags`**

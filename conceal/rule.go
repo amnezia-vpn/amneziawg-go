@@ -22,6 +22,11 @@ type readContext struct {
 	FlexBuffer
 	*BufferPool
 	nextDataSize int
+	formatData   []byte
+}
+
+func (ctx *readContext) rememberRead(b []byte) {
+	ctx.formatData = append(ctx.formatData, b...)
 }
 
 type writeContext struct {
@@ -55,12 +60,37 @@ func (r Rules) Write(w io.Writer, ctx *writeContext) error {
 }
 
 func (r Rules) Read(rd io.Reader, ctx *readContext) error {
+	formatDataStart := len(ctx.formatData)
 	for _, rule := range r {
 		if err := rule.Read(rd, ctx); err != nil {
+			if errors.Is(err, ErrFormat) {
+				return err
+			}
+			if errors.Is(err, errInvalidData) {
+				return NewFormatError(ctx.formatData[formatDataStart:], err)
+			}
 			return err
 		}
 	}
 	return nil
+}
+
+func (r Rules) Match(b []byte, pool *BufferPool) bool {
+	if r == nil {
+		return false
+	}
+	tmp := pool.Get()
+	defer pool.Put(tmp)
+
+	reader := newSliceReader(b)
+	ctx := readContext{
+		FlexBuffer: WrapFlexBuffer(tmp),
+		BufferPool: pool,
+	}
+	if err := r.Read(&reader, &ctx); err != nil {
+		return false
+	}
+	return len(reader.buf) == 0
 }
 
 func buildBytesRule(val string) (Rule, error) {
@@ -100,7 +130,9 @@ func (r *bytesRule) Read(rd io.Reader, ctx *readContext) error {
 	defer ctx.Put(tmp)
 
 	buf := tmp[:len(r.data)]
-	if _, err := io.ReadFull(rd, buf); err != nil {
+	n, err := io.ReadFull(rd, buf)
+	ctx.rememberRead(buf[:n])
+	if err != nil {
 		return err
 	}
 
@@ -144,7 +176,9 @@ func (r *randRule) Read(rd io.Reader, ctx *readContext) error {
 	defer ctx.Put(tmp)
 
 	buf := tmp[:r.length]
-	if _, err := io.ReadFull(rd, buf); err != nil {
+	n, err := io.ReadFull(rd, buf)
+	ctx.rememberRead(buf[:n])
+	if err != nil {
 		return err
 	}
 
@@ -191,7 +225,9 @@ func (r *randDigitRule) Read(rd io.Reader, ctx *readContext) error {
 	defer ctx.Put(tmp)
 
 	buf := tmp[:r.length]
-	if _, err := io.ReadFull(rd, buf); err != nil {
+	n, err := io.ReadFull(rd, buf)
+	ctx.rememberRead(buf[:n])
+	if err != nil {
 		return err
 	}
 
@@ -242,7 +278,9 @@ func (r *randCharRule) Read(rd io.Reader, ctx *readContext) error {
 	defer ctx.Put(tmp)
 
 	buf := tmp[:r.length]
-	if _, err := io.ReadFull(rd, buf); err != nil {
+	n, err := io.ReadFull(rd, buf)
+	ctx.rememberRead(buf[:n])
+	if err != nil {
 		return err
 	}
 
@@ -271,10 +309,16 @@ func (r *timestampRule) Write(w io.Writer, ctx *writeContext) error {
 }
 
 func (r *timestampRule) Read(rd io.Reader, ctx *readContext) error {
-	var timestamp uint32
-	if err := binary.Read(rd, binary.BigEndian, &timestamp); err != nil {
+	tmp := ctx.Get()
+	defer ctx.Put(tmp)
+
+	buf := tmp[:4]
+	n, err := io.ReadFull(rd, buf)
+	ctx.rememberRead(buf[:n])
+	if err != nil {
 		return err
 	}
+	_ = binary.BigEndian.Uint32(buf)
 
 	// TODO: check timestamp?
 
@@ -389,7 +433,12 @@ func (r *dataSizeRule) Read(rd io.Reader, ctx *readContext) error {
 	switch r.format {
 	case NumFormatBE:
 		buf := tmp[:r.length]
-		if _, err := io.ReadFull(rd, buf); err != nil {
+		n, err := io.ReadFull(rd, buf)
+		ctx.rememberRead(buf[:n])
+		if err != nil {
+			if errors.Is(err, io.ErrShortBuffer) {
+				return errInvalidData
+			}
 			return err
 		}
 		var size int
@@ -401,7 +450,12 @@ func (r *dataSizeRule) Read(rd io.Reader, ctx *readContext) error {
 
 	case NumFormatLE:
 		buf := tmp[:r.length]
-		if _, err := io.ReadFull(rd, buf); err != nil {
+		n, err := io.ReadFull(rd, buf)
+		ctx.rememberRead(buf[:n])
+		if err != nil {
+			if errors.Is(err, io.ErrShortBuffer) {
+				return errInvalidData
+			}
 			return err
 		}
 		var size int
@@ -413,25 +467,35 @@ func (r *dataSizeRule) Read(rd io.Reader, ctx *readContext) error {
 
 	case NumFormatAscii:
 		n, err := ReadUntil(rd, tmp, r.end)
+		if err == nil {
+			ctx.rememberRead(tmp[:n+1])
+		} else {
+			ctx.rememberRead(tmp[:n])
+		}
 		if err != nil {
 			return err
 		}
 
 		size64, err := strconv.ParseInt(string(tmp[:n]), 10, 32)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", errInvalidData, err)
 		}
 		ctx.nextDataSize = int(size64)
 
 	case NumFormatHex:
 		n, err := ReadUntil(rd, tmp, r.end)
+		if err == nil {
+			ctx.rememberRead(tmp[:n+1])
+		} else {
+			ctx.rememberRead(tmp[:n])
+		}
 		if err != nil {
 			return err
 		}
 
 		size64, err := strconv.ParseInt(string(tmp[:n]), 16, 32)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", errInvalidData, err)
 		}
 		ctx.nextDataSize = int(size64)
 	}
@@ -462,9 +526,10 @@ func (r *dataRule) Write(w io.Writer, ctx *writeContext) error {
 func (r *dataRule) Read(rd io.Reader, ctx *readContext) error {
 	buf := ctx.PushTail(ctx.nextDataSize)
 	if buf == nil {
-		return io.ErrShortBuffer
+		return errInvalidData
 	}
 
-	_, err := io.ReadFull(rd, buf)
+	n, err := io.ReadFull(rd, buf)
+	ctx.rememberRead(buf[:n])
 	return err
 }
