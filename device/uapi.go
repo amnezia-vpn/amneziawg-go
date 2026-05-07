@@ -160,6 +160,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("format_out=%s", device.net.masqueradeOpts.RulesOut.Spec())
 		}
 
+		if device.net.fallbackPort != 0 {
+			sendf("fallback_port=%d", device.net.fallbackPort)
+		}
+
 		sendf("header_compat=%s", strconv.FormatBool(device.net.framedOpts.HeaderCompat))
 
 		for _, peer := range device.peers.keyMap {
@@ -612,6 +616,22 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		if err := device.BindUpdate(); err != nil {
 			// TODO: change IpcErrorPortInUse to something reasonable
 			return ipcErrorf(ipc.IpcErrorPortInUse, "failed to set header_compat: %w", err)
+		}
+
+	case "fallback_port":
+		port, err := strconv.ParseUint(value, 10, 16)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse fallback_port: %w", err)
+		}
+		if port == 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "fallback_port must be in range 1-65535")
+		}
+
+		device.log.Verbosef("UAPI: Updating fallback_port")
+		device.net.fallbackPort = uint16(port)
+
+		if err := device.BindUpdate(); err != nil {
+			return ipcErrorf(ipc.IpcErrorPortInUse, "failed to set fallback_port: %w", err)
 		}
 
 	default:

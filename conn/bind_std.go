@@ -26,6 +26,7 @@ var (
 	_ Framable      = (*StdNetBind)(nil)
 	_ Preludable    = (*StdNetBind)(nil)
 	_ Masqueradable = (*StdNetBind)(nil)
+	_ Fallbackable  = (*StdNetBind)(nil)
 )
 
 // StdNetBind implements Bind for all platforms. While Windows has its own Bind
@@ -55,6 +56,7 @@ type StdNetBind struct {
 	framedOpts     conceal.FramedOpts
 	preludeOpts    conceal.PreludeOpts
 	masqueradeOpts conceal.MasqueradeOpts
+	fallbackPort   uint16
 }
 
 func NewStdNetBind() Bind {
@@ -326,11 +328,17 @@ func (s *StdNetBind) Close() error {
 
 	var err1, err2 error
 	if s.ipv4 != nil {
+		if closer, ok := s.ipv4PC.(fallbackSessionCloser); ok {
+			closer.closeFallbackSessions()
+		}
 		err1 = s.ipv4.Close()
 		s.ipv4 = nil
 		s.ipv4PC = nil
 	}
 	if s.ipv6 != nil {
+		if closer, ok := s.ipv6PC.(fallbackSessionCloser); ok {
+			closer.closeFallbackSessions()
+		}
 		err2 = s.ipv6.Close()
 		s.ipv6 = nil
 		s.ipv6PC = nil

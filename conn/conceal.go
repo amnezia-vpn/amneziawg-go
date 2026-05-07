@@ -18,6 +18,10 @@ type Masqueradable interface {
 	SetMasqueradeOpts(opts conceal.MasqueradeOpts)
 }
 
+type Fallbackable interface {
+	SetFallbackPort(port uint16)
+}
+
 type concealStage string
 
 const (
@@ -117,6 +121,9 @@ func (b *StdNetBind) upgradeUDPConn(conn UDPConn) UDPConn {
 			}
 		}
 	}
+	if b.fallbackPort != 0 {
+		conn = newFallbackUDPConn(conn, origin, b.fallbackPort)
+	}
 	return conn
 }
 
@@ -138,6 +145,9 @@ func (b *StdNetBind) upgradePacketConn(conn LinuxPacketConn) LinuxPacketConn {
 			}
 		}
 	}
+	if b.fallbackPort != 0 {
+		conn = newFallbackBatchConn(conn, origin, b.fallbackPort)
+	}
 	return conn
 }
 
@@ -151,6 +161,10 @@ func (b *StdNetBind) SetPreludeOpts(opts conceal.PreludeOpts) {
 
 func (b *StdNetBind) SetMasqueradeOpts(opts conceal.MasqueradeOpts) {
 	b.masqueradeOpts = opts
+}
+
+func (b *StdNetBind) SetFallbackPort(port uint16) {
+	b.fallbackPort = port
 }
 
 func (b *BindStream) upgradeConn(conn net.Conn) net.Conn {
@@ -185,4 +199,8 @@ func (b *BindStream) SetPreludeOpts(opts conceal.PreludeOpts) {
 
 func (b *BindStream) SetMasqueradeOpts(opts conceal.MasqueradeOpts) {
 	b.masqueradeOpts = opts
+}
+
+func (b *BindStream) SetFallbackPort(port uint16) {
+	b.fallbackPort = port
 }

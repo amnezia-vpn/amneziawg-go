@@ -174,7 +174,20 @@ func (c *PreludeConn) Read(b []byte) (n int, err error) {
 			c.seenValid = true
 			return n, nil
 		}
+		if c.isPreludeRecord(b[:n]) {
+			continue
+		}
+		return 0, NewFormatError(b[:n], errInvalidData)
 	}
+}
+
+func (c *PreludeConn) isPreludeRecord(b []byte) bool {
+	for _, rules := range c.rulesArr {
+		if rules.Match(b, c.pool) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *PreludeConn) Write(b []byte) (n int, err error) {

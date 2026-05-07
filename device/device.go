@@ -50,6 +50,7 @@ type Device struct {
 		framedOpts     conceal.FramedOpts
 		preludeOpts    conceal.PreludeOpts
 		masqueradeOpts conceal.MasqueradeOpts
+		fallbackPort   uint16
 	}
 
 	staticIdentity struct {
@@ -514,6 +515,10 @@ func (device *Device) BindUpdate() error {
 
 	if masqueradable, ok := underlying.(conn.Masqueradable); ok {
 		masqueradable.SetMasqueradeOpts(netc.masqueradeOpts)
+	}
+
+	if fallbackable, ok := underlying.(conn.Fallbackable); ok {
+		fallbackable.SetFallbackPort(netc.fallbackPort)
 	}
 
 	recvFns, netc.port, err = netc.bind.Open(netc.port)

@@ -241,30 +241,30 @@ func (e *frameEncoding) IsInitiationRecord(b []byte) bool {
 	return e.recordKind(b) == frameRecordInitiation
 }
 
-func (e *frameEncoding) Decode(b []byte) int {
+func (e *frameEncoding) Decode(b []byte) (int, error) {
 	switch e.recordKind(b) {
 	case frameRecordInitiation:
 		if e.compat {
-			return decodeOneCompat(b, e.header.initial, e.padding.initial)
+			return decodeOneCompat(b, e.header.initial, e.padding.initial), nil
 		}
-		return decodeOne(b, e.header.initial, e.padding.initial, WireguardMsgInitiationType)
+		return decodeOne(b, e.header.initial, e.padding.initial, WireguardMsgInitiationType), nil
 	case frameRecordResponse:
 		if e.compat {
-			return decodeOneCompat(b, e.header.response, e.padding.response)
+			return decodeOneCompat(b, e.header.response, e.padding.response), nil
 		}
-		return decodeOne(b, e.header.response, e.padding.response, WireguardMsgResponseType)
+		return decodeOne(b, e.header.response, e.padding.response, WireguardMsgResponseType), nil
 	case frameRecordCookie:
 		if e.compat {
-			return decodeOneCompat(b, e.header.cookie, e.padding.cookie)
+			return decodeOneCompat(b, e.header.cookie, e.padding.cookie), nil
 		}
-		return decodeOne(b, e.header.cookie, e.padding.cookie, WireguardMsgCookieReplyType)
+		return decodeOne(b, e.header.cookie, e.padding.cookie, WireguardMsgCookieReplyType), nil
 	case frameRecordTransport:
 		if e.compat {
-			return decodeOneCompat(b, e.header.transport, e.padding.transport)
+			return decodeOneCompat(b, e.header.transport, e.padding.transport), nil
 		}
-		return decodeOne(b, e.header.transport, e.padding.transport, WireguardMsgTransportType)
+		return decodeOne(b, e.header.transport, e.padding.transport, WireguardMsgTransportType), nil
 	default:
-		return len(b)
+		return 0, NewFormatError(b, errInvalidData)
 	}
 }
 
@@ -289,7 +289,13 @@ type FramedConn struct {
 
 func (c *FramedConn) Read(b []byte) (n int, err error) {
 	n, err = c.Conn.Read(b)
-	n = c.enc.Decode(b[:n])
+	if n > 0 {
+		var decodeErr error
+		n, decodeErr = c.enc.Decode(b[:n])
+		if decodeErr != nil {
+			return 0, decodeErr
+		}
+	}
 	return n, err
 }
 
@@ -328,7 +334,7 @@ func (c *FramedUDPConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}
-	n = c.enc.Decode(b[:n])
+	n, err = c.enc.Decode(b[:n])
 	return n, oobn, flags, addr, err
 }
 
@@ -370,7 +376,10 @@ func (c *FramedBatchConn) ReadBatch(ms []ipv4.Message, flags int) (n int, err er
 
 	for i := range ms[:n] {
 		b := ms[i].Buffers[0][:ms[i].N]
-		ms[i].N = c.enc.Decode(b)
+		ms[i].N, err = c.enc.Decode(b)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	return n, nil
