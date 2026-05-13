@@ -249,6 +249,144 @@ func TestAWGDevicePing(t *testing.T) {
 	})
 }
 
+// spyBind wraps a conn.Bind and captures copies of all sent packets.
+// Used by TestKeepaliveIncludesS4Padding to verify wire format.
+type spyBind struct {
+	conn.Bind
+	packets chan []byte
+}
+
+func newSpyBind(b conn.Bind) *spyBind {
+	return &spyBind{
+		Bind:    b,
+		packets: make(chan []byte, 4096),
+	}
+}
+
+func (s *spyBind) Send(bufs [][]byte, ep conn.Endpoint) error {
+	for _, b := range bufs {
+		pkt := make([]byte, len(b))
+		copy(pkt, b)
+		select {
+		case s.packets <- pkt:
+		default:
+		}
+	}
+	return s.Bind.Send(bufs, ep)
+}
+
+func (s *spyBind) drain() {
+	for {
+		select {
+		case <-s.packets:
+		default:
+			return
+		}
+	}
+}
+
+// TestKeepaliveIncludesS4Padding verifies that keepalive packets include
+// S4 transport padding, matching the kernel module (amneziawg.ko) behavior.
+//
+// The kernel module's encrypt_packet() (send.c) unconditionally prepends
+// S4 random bytes to ALL transport packets including keepalives. Before
+// the fix, awg-go's RoutineSequentialSender skipped S4 for keepalives,
+// causing the kernel module to reject them: after stripping the expected
+// S4 prefix, the remaining bytes were too short or the H4 field didn't
+// validate.
+//
+// See: https://github.com/amnezia-vpn/amneziawg-go/issues/110
+func TestKeepaliveIncludesS4Padding(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	const s4 = 25
+
+	// Create spy bind on device 0 to capture raw wire packets.
+	innerBinds := bindtest.NewChannelBinds()
+	spy := newSpyBind(innerBinds[0])
+	binds := [2]conn.Bind{spy, innerBinds[1]}
+
+	cfg, endpointCfg := genConfigs(t,
+		"jc", "3",
+		"jmin", "40",
+		"jmax", "70",
+		"s1", "15",
+		"s2", "18",
+		"s3", "20",
+		"s4", "25",
+		"h1", "123456-123500",
+		"h2", "67543-67550",
+		"h3", "123123-123200",
+		"h4", "32345-32350",
+	)
+
+	// Create devices with spy bind on device 0.
+	var pair testPair
+	for i := range pair {
+		p := &pair[i]
+		p.tun = tuntest.NewChannelTUN()
+		p.ip = netip.AddrFrom4([4]byte{1, 0, 0, byte(i + 1)})
+		level := LogLevelVerbose
+		p.dev = NewDevice(p.tun.TUN(), binds[i], NewLogger(level, fmt.Sprintf("dev%d: ", i)))
+		if err := p.dev.IpcSet(cfg[i]); err != nil {
+			t.Fatalf("failed to configure device %d: %v", i, err)
+		}
+		if err := p.dev.Up(); err != nil {
+			t.Fatalf("failed to bring up device %d: %v", i, err)
+		}
+		endpointCfg[i^1] = fmt.Sprintf(endpointCfg[i^1], p.dev.net.port)
+		t.Cleanup(p.dev.Close)
+	}
+	for i := range pair {
+		if err := pair[i].dev.IpcSet(endpointCfg[i]); err != nil {
+			t.Fatalf("failed to configure device endpoint %d: %v", i, err)
+		}
+	}
+
+	// Exchange data to establish handshake and prove data flow works.
+	pair.Send(t, Ping, nil)
+	pair.Send(t, Pong, nil)
+
+	// Drain all packets from spy (handshake + junk + data).
+	// Small sleep to let any in-flight packets settle.
+	time.Sleep(100 * time.Millisecond)
+	spy.drain()
+
+	// Find peer on device 0.
+	pair[0].dev.peers.RLock()
+	var peer0 *Peer
+	for _, p := range pair[0].dev.peers.keyMap {
+		peer0 = p
+		break
+	}
+	pair[0].dev.peers.RUnlock()
+	if peer0 == nil {
+		t.Fatal("no peer found on device 0")
+	}
+
+	// Send a keepalive from device 0.
+	peer0.SendKeepalive()
+
+	// Wait for the keepalive to appear in the spy.
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case pkt := <-spy.packets:
+		// With S4 padding, the keepalive wire format is:
+		//   S4 random bytes + H4(4) + receiver(4) + counter(8) + poly1305(16)
+		//   = S4 + MessageKeepaliveSize = 25 + 32 = 57
+		// Without S4 padding (the bug), it would be just 32.
+		expectedSize := s4 + MessageKeepaliveSize
+		if len(pkt) != expectedSize {
+			t.Fatalf("keepalive packet size = %d, want %d (S4(%d) + MessageKeepaliveSize(%d))",
+				len(pkt), expectedSize, s4, MessageKeepaliveSize)
+		}
+	case <-timer.C:
+		t.Fatal("timed out waiting for keepalive packet from device 0")
+	}
+}
+
 // Needs to be stopped with Ctrl-C
 func TestAWGHandshakeDevicePing(t *testing.T) {
 	t.Skip("This test is intended to be run manually, not as part of the test suite.")
