@@ -167,7 +167,7 @@ func (b *StdNetBind) SetFallbackPort(port uint16) {
 	b.fallbackPort = port
 }
 
-func (b *BindStream) upgradeConn(conn net.Conn) net.Conn {
+func (b *BindStream) upgradeConn(conn net.Conn, preludeState *conceal.PreludeState, emitPrelude bool) net.Conn {
 	var recordConn conceal.StreamRecordConn
 	for _, stage := range b.streamConcealPipeline().stages {
 		switch stage {
@@ -177,7 +177,7 @@ func (b *BindStream) upgradeConn(conn net.Conn) net.Conn {
 				conn = masquerade
 			}
 		case concealStagePrelude:
-			if prelude, ok := conceal.NewPreludeConn(recordConn, &b.bufferPool, b.framedOpts, b.preludeOpts); ok {
+			if prelude, ok := conceal.NewPreludeConnWithState(recordConn, &b.bufferPool, b.framedOpts, b.preludeOpts, preludeState, emitPrelude); ok {
 				conn = prelude
 			}
 		case concealStageFramed:

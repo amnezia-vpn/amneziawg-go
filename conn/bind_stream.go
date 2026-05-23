@@ -113,7 +113,7 @@ func (b *BindStream) accept(listener net.Listener) {
 			// log this error somewhere
 			break
 		}
-		conn := b.upgradeConn(rawConn)
+		conn := b.upgradeConn(rawConn, nil, false)
 
 		b.wg.Add(1)
 		go b.handleAccepted(rawConn, conn)
@@ -129,9 +129,10 @@ func (b *BindStream) handleAccepted(rawConn, conn net.Conn) {
 	}
 
 	ep := &streamEndpoint{
-		conn:    conn,
-		rawConn: rawConn,
-		dst:     ap,
+		conn:            conn,
+		rawConn:         rawConn,
+		dst:             ap,
+		outboundPrelude: false,
 	}
 
 	b.wg.Add(1)
@@ -154,7 +155,8 @@ func (b *BindStream) dial(ep *streamEndpoint) error {
 		return fmt.Errorf("failed to dial context: %v", err)
 	}
 
-	conn := b.upgradeConn(rawConn)
+	ep.ResetPreludeState()
+	conn := b.upgradeConn(rawConn, ep.PreludeState(), ep.outboundPrelude)
 	ep.conn = conn
 	ep.rawConn = rawConn
 
@@ -255,7 +257,8 @@ func (b *BindStream) ParseEndpoint(s string) (Endpoint, error) {
 	}
 
 	return &streamEndpoint{
-		dst: tcpAddr.AddrPort(),
+		dst:             tcpAddr.AddrPort(),
+		outboundPrelude: true,
 	}, nil
 }
 
@@ -269,8 +272,10 @@ type streamEndpoint struct {
 	conn    net.Conn
 	rawConn net.Conn
 
-	dst   netip.AddrPort
-	mutex sync.Mutex
+	dst             netip.AddrPort
+	prelude         conceal.PreludeState
+	outboundPrelude bool
+	mutex           sync.Mutex
 }
 
 func (e *streamEndpoint) Close() {
@@ -285,6 +290,7 @@ func (e *streamEndpoint) Close() {
 		e.rawConn.Close()
 		e.rawConn = nil
 	}
+	e.ResetPreludeState()
 }
 
 func (e *streamEndpoint) DstToString() string {
@@ -301,6 +307,15 @@ func (e *streamEndpoint) DstIP() netip.Addr {
 }
 
 func (e *streamEndpoint) ClearSrc() {
+	e.ResetPreludeState()
+}
+
+func (e *streamEndpoint) PreludeState() *conceal.PreludeState {
+	return &e.prelude
+}
+
+func (e *streamEndpoint) ResetPreludeState() {
+	e.prelude.Reset()
 }
 
 func (e *streamEndpoint) SrcToString() string {

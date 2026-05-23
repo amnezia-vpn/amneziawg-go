@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"sync"
+	"time"
 )
 
 // UDPDatagramPipeline applies UDP conceal transforms at datagram boundaries.
@@ -19,10 +20,11 @@ type UDPDatagramPipeline struct {
 	masquerade       masqueradeEncoding
 	masqueradeActive bool
 
-	preludeActive bool
-	rulesArr      [5]Rules
-	junkCount     int
-	junkGen       *junkGenerator
+	preludeActive         bool
+	preludeResendInterval time.Duration
+	rulesArr              [5]Rules
+	junkCount             int
+	junkGen               *junkGenerator
 }
 
 func NewUDPDatagramPipeline(
@@ -36,11 +38,12 @@ func NewUDPDatagramPipeline(
 	}
 
 	pipeline := &UDPDatagramPipeline{
-		pool:          WrapBufferPool(pool),
-		classifier:    newPacketClassifier(framedOpts),
-		preludeActive: !preludeOpts.IsEmpty(),
-		rulesArr:      preludeOpts.RulesArr,
-		junkCount:     preludeOpts.Jc,
+		pool:                  WrapBufferPool(pool),
+		classifier:            newPacketClassifier(framedOpts),
+		preludeActive:         !preludeOpts.IsEmpty(),
+		preludeResendInterval: preludeOpts.ResendInterval,
+		rulesArr:              preludeOpts.RulesArr,
+		junkCount:             preludeOpts.Jc,
 	}
 
 	if pipeline.junkCount > 0 {
@@ -55,6 +58,14 @@ func NewUDPDatagramPipeline(
 
 func (p *UDPDatagramPipeline) Active() bool {
 	return p.preludeActive || p.framingActive || p.masqueradeActive
+}
+
+func (p *UDPDatagramPipeline) PreludeActive() bool {
+	return p.preludeActive
+}
+
+func (p *UDPDatagramPipeline) PreludeResendInterval() time.Duration {
+	return p.preludeResendInterval
 }
 
 func (p *UDPDatagramPipeline) Encode(dst, src []byte) (int, error) {
@@ -117,8 +128,8 @@ func (p *UDPDatagramPipeline) DecodeInPlaceErr(buf []byte, n int) (int, error) {
 	return n, nil
 }
 
-func (p *UDPDatagramPipeline) EmitPrelude(packet []byte, emit func([]byte) error) error {
-	if !p.preludeActive || !p.classifier.MatchesInitiationHeader(packet) {
+func (p *UDPDatagramPipeline) EmitPrelude(emit func([]byte) error) error {
+	if !p.preludeActive {
 		return nil
 	}
 

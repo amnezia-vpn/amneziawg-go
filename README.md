@@ -54,14 +54,15 @@ $ make
 ## Configuration
 
 > [!NOTE]
-> If there is no value specified (for any param), AWG treats it as 0
+> If there is no value specified (for any param), AWG treats it as 0, except `PreludeResendInterval`, which defaults to 120 seconds.
 
-### Junk packets
+### Prelude packets
 
-The amount of junk packets specified in `Jc` with a random size between `Jmin` and `Jmax` would be generated and sent prior every handshake
+Junk packets and custom signature packets are generated once at the beginning of an outbound endpoint session. They can be forced again by `PreludeResendInterval`.
 
 - `Jc: int`, recommended range is 4-12
 - `Jmin: int` <= `Jmax:int`
+- `PreludeResendInterval: int`, seconds; default is 120, explicit 0 disables timer-based resend
 
 > [!TIP]
 > Junk packets do not carry any actual data, so there is no need to specify it on both sides. General recommendation is to use it on the client side only
@@ -97,7 +98,7 @@ Values could be specified as:
 
 ### Custom signature packets
 
-These packets are being send prior to every handshake, in the same way as Junk packets do. The sending order is `I1`, `I2`, `I3`, `I4`, `I5`. If there is no value specified, the packet is skipped.
+These packets are sent as part of the prelude, in the same way as Junk packets do. The sending order is `I1`, `I2`, `I3`, `I4`, `I5`. If there is no value specified, the packet is skipped.
 
 - `I1: string`
 - `I2: string`

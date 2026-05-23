@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conceal"
 )
@@ -31,6 +32,7 @@ type ConcealBind struct {
 	fallbackPort   uint16
 
 	fallbackSessions map[string]*concealBindFallbackSession
+	preludeStates    map[string]*conceal.PreludeState
 
 	pipeline atomic.Pointer[conceal.UDPDatagramPipeline]
 }
@@ -129,7 +131,50 @@ func (b *ConcealBind) SetMark(mark uint32) error {
 	return b.inner.SetMark(mark)
 }
 
+func (b *ConcealBind) preludeState(ep Endpoint) *conceal.PreludeState {
+	if ep == nil {
+		return nil
+	}
+	if preludeEP, ok := ep.(PreludeEndpoint); ok {
+		return preludeEP.PreludeState()
+	}
+
+	key := ep.DstToString()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.preludeStates == nil {
+		b.preludeStates = make(map[string]*conceal.PreludeState)
+	}
+	state := b.preludeStates[key]
+	if state == nil {
+		state = new(conceal.PreludeState)
+		b.preludeStates[key] = state
+	}
+	return state
+}
+
+func (b *ConcealBind) resetPreludeState(ep Endpoint) {
+	if ep == nil {
+		return
+	}
+	if preludeEP, ok := ep.(PreludeEndpoint); ok {
+		preludeEP.ResetPreludeState()
+		return
+	}
+
+	key := ep.DstToString()
+	b.mu.Lock()
+	if state := b.preludeStates[key]; state != nil {
+		state.Reset()
+	}
+	b.mu.Unlock()
+}
+
 func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
+	if len(bufs) == 0 {
+		return nil
+	}
+
 	pipeline := b.currentPipeline()
 	if pipeline == nil || !pipeline.Active() {
 		return b.inner.Send(bufs, ep)
@@ -192,13 +237,17 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 		return nil
 	}
 
-	for _, buf := range bufs {
-		if err := pipeline.EmitPrelude(buf, func(packet []byte) error {
+	preludeState := b.preludeState(ep)
+	if pipeline.PreludeActive() && preludeState != nil && preludeState.ClaimSend(time.Now(), pipeline.PreludeResendInterval()) {
+		if err := pipeline.EmitPrelude(func(packet []byte) error {
 			return appendPacket(bytes.Clone(packet), nil)
 		}); err != nil {
+			b.resetPreludeState(ep)
 			return err
 		}
+	}
 
+	for _, buf := range bufs {
 		encoded := b.bufPool.Get().([]byte)
 		n, err := pipeline.Encode(encoded, buf)
 		if err != nil {
@@ -214,7 +263,12 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 }
 
 func (b *ConcealBind) ParseEndpoint(s string) (Endpoint, error) {
-	return b.inner.ParseEndpoint(s)
+	ep, err := b.inner.ParseEndpoint(s)
+	if err != nil {
+		return nil, err
+	}
+	b.resetPreludeState(ep)
+	return ep, nil
 }
 
 func (b *ConcealBind) BatchSize() int {

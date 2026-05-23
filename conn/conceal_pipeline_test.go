@@ -112,13 +112,13 @@ func TestBindStreamPipelineOmitsPreludeForTCPJunkOnlyConfig(t *testing.T) {
 	}
 }
 
-func TestBindStreamTCPPreludeInjectsBeforeEveryInitiation(t *testing.T) {
+func TestBindStreamTCPPreludeInjectsOncePerSession(t *testing.T) {
 	senderRaw, receiverRaw := net.Pipe()
 	defer senderRaw.Close()
 	defer receiverRaw.Close()
 
 	bind := newRecordAwareBind(t)
-	sender := bind.upgradeConn(senderRaw)
+	sender := upgradeTestStreamConn(bind, senderRaw, true)
 	receiver := mustRecordConn(t, receiverRaw, &bind.bufferPool, conceal.MasqueradeOpts{
 		RulesIn: mustParseRules(t, "<dz be 2><d>"),
 	})
@@ -151,11 +151,6 @@ func TestBindStreamTCPPreludeInjectsBeforeEveryInitiation(t *testing.T) {
 		writeErr <- err
 	}()
 
-	secondPrelude := readRecord(t, receiver, 16)
-	if !bytes.Equal(secondPrelude, []byte{0xaa, 0xbb}) {
-		t.Fatalf("second prelude record = %x, want aabb", secondPrelude)
-	}
-
 	secondInit := readRecord(t, receiver, len(initiation))
 	if gotHeader := binary.LittleEndian.Uint32(secondInit[:4]); gotHeader != 777 {
 		t.Fatalf("second initiation header = %d, want 777", gotHeader)
@@ -166,13 +161,13 @@ func TestBindStreamTCPPreludeInjectsBeforeEveryInitiation(t *testing.T) {
 	}
 }
 
-func TestBindStreamTCPPreludeSkipsNonInitiationRecords(t *testing.T) {
+func TestBindStreamTCPPreludeInjectsBeforeFirstOutboundRecord(t *testing.T) {
 	senderRaw, receiverRaw := net.Pipe()
 	defer senderRaw.Close()
 	defer receiverRaw.Close()
 
 	bind := newRecordAwareBind(t)
-	sender := bind.upgradeConn(senderRaw)
+	sender := upgradeTestStreamConn(bind, senderRaw, true)
 	receiver := mustRecordConn(t, receiverRaw, &bind.bufferPool, conceal.MasqueradeOpts{
 		RulesIn: mustParseRules(t, "<dz be 2><d>"),
 	})
@@ -183,6 +178,11 @@ func TestBindStreamTCPPreludeSkipsNonInitiationRecords(t *testing.T) {
 		_, err := sender.Write(transport)
 		writeErr <- err
 	}()
+
+	prelude := readRecord(t, receiver, 16)
+	if !bytes.Equal(prelude, []byte{0xaa, 0xbb}) {
+		t.Fatalf("prelude record = %x, want aabb", prelude)
+	}
 
 	gotTransport := readRecord(t, receiver, len(transport))
 	if gotHeader := binary.LittleEndian.Uint32(gotTransport[:4]); gotHeader != 779 {
@@ -209,8 +209,8 @@ func TestBindStreamTCPPreludeDropsInjectedDecoysOnRead(t *testing.T) {
 	defer receiverRaw.Close()
 
 	bind := newRecordAwareBind(t)
-	sender := bind.upgradeConn(senderRaw)
-	receiver := bind.upgradeConn(receiverRaw)
+	sender := upgradeTestStreamConn(bind, senderRaw, true)
+	receiver := upgradeTestStreamConn(bind, receiverRaw, false)
 
 	initiation := makeInitiationPacket()
 	writeErr := make(chan error, 1)
@@ -235,7 +235,7 @@ func TestBindStreamTCPPreludeRejectsLeadingUnknownRecords(t *testing.T) {
 	defer receiverRaw.Close()
 
 	bind := newRecordAwareBind(t)
-	receiver := bind.upgradeConn(receiverRaw)
+	receiver := upgradeTestStreamConn(bind, receiverRaw, false)
 
 	recordWriter := mustRecordConn(t, senderRaw, &bind.bufferPool, conceal.MasqueradeOpts{
 		RulesOut: mustParseRules(t, "<dz be 2><d>"),
@@ -263,8 +263,8 @@ func TestBindStreamTCPPreludePassesResponseAndTransportRecords(t *testing.T) {
 	defer receiverRaw.Close()
 
 	bind := newRecordAwareBind(t)
-	sender := bind.upgradeConn(senderRaw)
-	receiver := bind.upgradeConn(receiverRaw)
+	sender := upgradeTestStreamConn(bind, senderRaw, false)
+	receiver := upgradeTestStreamConn(bind, receiverRaw, false)
 
 	response := makeResponsePacket()
 	sendAndAssertRoundTrip(t, sender, receiver, response)
@@ -296,6 +296,14 @@ func newRecordAwareBind(t *testing.T) *BindStream {
 		},
 	})
 	return bind
+}
+
+func upgradeTestStreamConn(bind *BindStream, conn net.Conn, emitPrelude bool) net.Conn {
+	var state *conceal.PreludeState
+	if emitPrelude {
+		state = new(conceal.PreludeState)
+	}
+	return bind.upgradeConn(conn, state, emitPrelude)
 }
 
 func sendAndAssertRoundTrip(t *testing.T, sender, receiver net.Conn, packet []byte) {

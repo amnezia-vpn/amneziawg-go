@@ -96,7 +96,8 @@ type StdNetEndpoint struct {
 	// src is the current sticky source address and interface index, if
 	// supported. Typically this is a PKTINFO structure from/for control
 	// messages, see unix.PKTINFO for an example.
-	src []byte
+	src     []byte
+	prelude conceal.PreludeState
 }
 
 var (
@@ -119,6 +120,15 @@ func (e *StdNetEndpoint) ClearSrc() {
 		// Truncate src, no need to reallocate.
 		e.src = e.src[:0]
 	}
+	e.ResetPreludeState()
+}
+
+func (e *StdNetEndpoint) PreludeState() *conceal.PreludeState {
+	return &e.prelude
+}
+
+func (e *StdNetEndpoint) ResetPreludeState() {
+	e.prelude.Reset()
 }
 
 func (e *StdNetEndpoint) DstIP() netip.Addr {

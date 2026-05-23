@@ -307,6 +307,7 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
 
 	device.net.network = "udp"
 	device.net.framedOpts.HeaderCompat = true
+	device.net.preludeOpts.ResendInterval = conceal.DefaultPreludeResendInterval
 
 	device.PopulatePools()
 

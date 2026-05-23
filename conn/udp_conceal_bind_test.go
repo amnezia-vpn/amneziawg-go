@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conceal"
 )
@@ -159,13 +160,13 @@ func TestConcealBindSendBatchesPreludeInWireOrder(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	if got := sendCallBatchLengths(inner.sendCalls); !slices.Equal(got, []int{3, 3, 1}) {
-		t.Fatalf("send batch lengths = %v, want [3 3 1]", got)
+	if got := sendCallBatchLengths(inner.sendCalls); !slices.Equal(got, []int{3, 2}) {
+		t.Fatalf("send batch lengths = %v, want [3 2]", got)
 	}
 
 	wirePackets := flattenSendCalls(inner.sendCalls)
-	if len(wirePackets) != 7 {
-		t.Fatalf("wire packet count = %d, want 7", len(wirePackets))
+	if len(wirePackets) != 5 {
+		t.Fatalf("wire packet count = %d, want 5", len(wirePackets))
 	}
 	if !bytes.Equal(wirePackets[0], []byte{0xaa, 0xbb}) {
 		t.Fatalf("wire packet 0 prelude = %x, want aabb", wirePackets[0])
@@ -179,14 +180,91 @@ func TestConcealBindSendBatchesPreludeInWireOrder(t *testing.T) {
 	if got := wireHeader(t, wirePackets[3]); got != 779 {
 		t.Fatalf("wire packet 3 header = %d, want 779", got)
 	}
-	if !bytes.Equal(wirePackets[4], []byte{0xaa, 0xbb}) {
-		t.Fatalf("wire packet 4 prelude = %x, want aabb", wirePackets[4])
+	if got := wireHeader(t, wirePackets[4]); got != 777 {
+		t.Fatalf("wire packet 4 header = %d, want 777", got)
 	}
-	if len(wirePackets[5]) != 3 {
-		t.Fatalf("wire packet 5 junk len = %d, want 3", len(wirePackets[5]))
+}
+
+func TestConcealBindPreludeResendIntervalZeroDisablesForcedResend(t *testing.T) {
+	inner := &fakePacketBind{batchSize: 8}
+	bind := NewConcealBind(inner)
+	bind.SetFramedOpts(conceal.FramedOpts{H4: mustHeader(t, "779")})
+	bind.SetPreludeOpts(conceal.PreludeOpts{
+		ResendInterval: 0,
+		RulesArr: [5]conceal.Rules{
+			mustParseRules(t, "<b 0xaabb>"),
+		},
+	})
+
+	endpoint, err := bind.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
 	}
-	if got := wireHeader(t, wirePackets[6]); got != 777 {
-		t.Fatalf("wire packet 6 header = %d, want 777", got)
+
+	transport := makeTransportPacket()
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+
+	wirePackets := flattenSendCalls(inner.sendCalls)
+	if len(wirePackets) != 3 {
+		t.Fatalf("wire packet count = %d, want 3", len(wirePackets))
+	}
+	if !bytes.Equal(wirePackets[0], []byte{0xaa, 0xbb}) {
+		t.Fatalf("wire prelude = %x, want aabb", wirePackets[0])
+	}
+	if got := wireHeader(t, wirePackets[1]); got != 779 {
+		t.Fatalf("first transport header = %d, want 779", got)
+	}
+	if got := wireHeader(t, wirePackets[2]); got != 779 {
+		t.Fatalf("second transport header = %d, want 779", got)
+	}
+}
+
+func TestConcealBindPreludePositiveResendIntervalForcesResend(t *testing.T) {
+	inner := &fakePacketBind{batchSize: 8}
+	bind := NewConcealBind(inner)
+	bind.SetFramedOpts(conceal.FramedOpts{H4: mustHeader(t, "779")})
+	bind.SetPreludeOpts(conceal.PreludeOpts{
+		ResendInterval: time.Nanosecond,
+		RulesArr: [5]conceal.Rules{
+			mustParseRules(t, "<b 0xaabb>"),
+		},
+	})
+
+	endpoint, err := bind.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+
+	transport := makeTransportPacket()
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+
+	wirePackets := flattenSendCalls(inner.sendCalls)
+	if len(wirePackets) != 4 {
+		t.Fatalf("wire packet count = %d, want 4", len(wirePackets))
+	}
+	if !bytes.Equal(wirePackets[0], []byte{0xaa, 0xbb}) {
+		t.Fatalf("first prelude = %x, want aabb", wirePackets[0])
+	}
+	if got := wireHeader(t, wirePackets[1]); got != 779 {
+		t.Fatalf("first transport header = %d, want 779", got)
+	}
+	if !bytes.Equal(wirePackets[2], []byte{0xaa, 0xbb}) {
+		t.Fatalf("second prelude = %x, want aabb", wirePackets[2])
+	}
+	if got := wireHeader(t, wirePackets[3]); got != 779 {
+		t.Fatalf("second transport header = %d, want 779", got)
 	}
 }
 
@@ -550,10 +628,21 @@ func (b *fakePacketBind) BatchSize() int {
 }
 
 type fakePacketEndpoint struct {
-	addr netip.AddrPort
+	addr    netip.AddrPort
+	prelude conceal.PreludeState
 }
 
-func (e *fakePacketEndpoint) ClearSrc() {}
+func (e *fakePacketEndpoint) ClearSrc() {
+	e.ResetPreludeState()
+}
+
+func (e *fakePacketEndpoint) PreludeState() *conceal.PreludeState {
+	return &e.prelude
+}
+
+func (e *fakePacketEndpoint) ResetPreludeState() {
+	e.prelude.Reset()
+}
 
 func (e *fakePacketEndpoint) SrcToString() string {
 	return ""
@@ -603,3 +692,4 @@ func wireHeader(t *testing.T, packet []byte) uint32 {
 
 var _ Bind = (*fakePacketBind)(nil)
 var _ Endpoint = (*fakePacketEndpoint)(nil)
+var _ PreludeEndpoint = (*fakePacketEndpoint)(nil)
