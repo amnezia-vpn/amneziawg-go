@@ -128,10 +128,28 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	var sendBuffer [][]byte
 
+	// AmneziaWG special/controlled junk. The special junk (i1..i5) is gated by
+	// the imitation interval (itime); on initiations where it is not due, the
+	// controlled junk (j1..j3) is sent instead. The schedule is only consulted
+	// when special junk is actually configured, mirroring AmneziaWG 1.5. With a
+	// zero itime the special junk is always due and the controlled junk is never
+	// sent, which reproduces the AmneziaWG 2.0 behaviour.
+	hasSpecial := false
 	for _, ipacket := range peer.device.ipackets {
 		if ipacket != nil {
-			buf := make([]byte, ipacket.ObfuscatedLen(0))
-			ipacket.Obfuscate(buf, nil)
+			hasSpecial = true
+			break
+		}
+	}
+
+	junkChains := peer.device.jpackets[:]
+	if hasSpecial && peer.device.dueSpecialJunk() {
+		junkChains = peer.device.ipackets[:]
+	}
+	for _, chain := range junkChains {
+		if chain != nil {
+			buf := make([]byte, chain.ObfuscatedLen(0))
+			chain.Obfuscate(buf, nil)
 			sendBuffer = append(sendBuffer, buf)
 		}
 	}

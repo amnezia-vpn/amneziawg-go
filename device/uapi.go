@@ -147,6 +147,18 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			}
 		}
 
+		for i, jpacket := range device.jpackets {
+			if jpacket != nil {
+				sendf("j%d=%s", i+1, jpacket.Spec)
+			}
+		}
+
+		device.imitation.mu.Lock()
+		if device.imitation.interval != 0 {
+			sendf("itime=%d", device.imitation.interval/time.Second)
+		}
+		device.imitation.mu.Unlock()
+
 		for _, peer := range device.peers.keyMap {
 			// Serialize peer state.
 			peer.handshake.mutex.RLock()
@@ -446,6 +458,40 @@ func (device *Device) handleDeviceLine(key, value string) error {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
 		}
 		device.ipackets[4] = chain
+
+	case "j1":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse J1: %w", err)
+		}
+		device.jpackets[0] = chain
+
+	case "j2":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse J2: %w", err)
+		}
+		device.jpackets[1] = chain
+
+	case "j3":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse J3: %w", err)
+		}
+		device.jpackets[2] = chain
+
+	case "itime":
+		seconds, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse itime: %w", err)
+		}
+		if seconds < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "itime must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating imitation interval")
+		device.imitation.mu.Lock()
+		device.imitation.interval = time.Duration(seconds) * time.Second
+		device.imitation.mu.Unlock()
 
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)

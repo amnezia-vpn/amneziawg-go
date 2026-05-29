@@ -111,6 +111,50 @@ type Device struct {
 	}
 
 	ipackets [5]*obfChain
+
+	// jpackets are AmneziaWG 1.5 "controlled junk" packets (j1..j3). Unlike
+	// ipackets (special junk), they are sent on handshake initiations where the
+	// special junk is not due yet (see imitation below and SendHandshakeInitiation).
+	jpackets [3]*obfChain
+
+	// imitation throttles the special junk packets (ipackets / i1..i5) to the
+	// AmneziaWG 1.5 "imitation interval" (itime). When interval is zero, the
+	// special junk is sent on every handshake initiation, which matches the
+	// AmneziaWG 2.0 behaviour; jpackets are then never sent.
+	imitation struct {
+		mu        sync.Mutex
+		interval  time.Duration
+		nextSend  time.Time
+		firstDone bool
+	}
+}
+
+// dueSpecialJunk reports whether the special junk packets (ipackets) are due to
+// be sent on this handshake initiation, advancing the imitation schedule when
+// they are. It mirrors AmneziaWG 1.5 SpecialHandshakeHandler.GenerateSpecialJunk:
+// the first initiation always sends them, and afterwards they are gated by the
+// itime interval. With a zero interval every initiation is due, so jpackets are
+// never sent — i.e. the AmneziaWG 2.0 behaviour falls out of the same code path.
+func (device *Device) dueSpecialJunk() bool {
+	device.imitation.mu.Lock()
+	defer device.imitation.mu.Unlock()
+
+	// A zero interval means no throttle: the special junk is always due, so the
+	// controlled junk is never sent. This is the AmneziaWG 2.0 behaviour.
+	if device.imitation.interval == 0 {
+		return true
+	}
+
+	if !device.imitation.firstDone {
+		device.imitation.firstDone = true
+		device.imitation.nextSend = time.Now().Add(device.imitation.interval)
+		return true
+	}
+	if !time.Now().After(device.imitation.nextSend) {
+		return false
+	}
+	device.imitation.nextSend = time.Now().Add(device.imitation.interval)
+	return true
 }
 
 // deviceState represents the state of a Device.

@@ -10,6 +10,7 @@ type obfBuilder func(val string) (obf, error)
 
 var obfBuilders = map[string]obfBuilder{
 	"b":  newBytesObf,
+	"c":  newCounterObf,
 	"t":  newTimestampObf,
 	"r":  newRandObf,
 	"rc": newRandCharObf,
