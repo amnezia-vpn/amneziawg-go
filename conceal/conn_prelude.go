@@ -5,15 +5,58 @@ import (
 	"math/big"
 	"net"
 	"sync"
+	"time"
 
 	"golang.org/x/net/ipv4"
 )
 
+const DefaultPreludeResendInterval = 120 * time.Second
+
 type PreludeOpts struct {
-	Jc       int
-	Jmin     int
-	Jmax     int
-	RulesArr [5]Rules
+	Jc             int
+	Jmin           int
+	Jmax           int
+	ResendInterval time.Duration
+	RulesArr       [5]Rules
+}
+
+type PreludeState struct {
+	mu       sync.Mutex
+	sent     bool
+	lastSent time.Time
+}
+
+func (s *PreludeState) ClaimSend(now time.Time, resendInterval time.Duration) bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.sent {
+		s.sent = true
+		s.lastSent = now
+		return true
+	}
+
+	if resendInterval <= 0 || now.Sub(s.lastSent) < resendInterval {
+		return false
+	}
+
+	s.lastSent = now
+	return true
+}
+
+func (s *PreludeState) Reset() {
+	if s == nil {
+		return
+	}
+
+	s.mu.Lock()
+	s.sent = false
+	s.lastSent = time.Time{}
+	s.mu.Unlock()
 }
 
 func (o PreludeOpts) HasDecoyRules() bool {
@@ -57,7 +100,7 @@ func NewPreludeUDPConn(
 	conn UDPConn,
 	origin UDPConn,
 	pool *sync.Pool,
-	header *RangedHeader,
+	_ *RangedHeader,
 	opts PreludeOpts,
 ) (c *PreludeUDPConn, ok bool) {
 	if opts.IsEmpty() {
@@ -69,31 +112,30 @@ func NewPreludeUDPConn(
 	}
 
 	return &PreludeUDPConn{
-		UDPConn:   conn,
-		origin:    origin,
-		pool:      WrapBufferPool(pool),
-		rulesArr:  opts.RulesArr,
-		junkCount: opts.Jc,
-		junkGen:   newJunkGenerator(opts.Jmin, opts.Jmax),
-		classifier: newPacketClassifier(FramedOpts{
-			H1:           header,
-			HeaderCompat: header != nil,
-		}),
+		UDPConn:        conn,
+		origin:         origin,
+		pool:           WrapBufferPool(pool),
+		rulesArr:       opts.RulesArr,
+		junkCount:      opts.Jc,
+		junkGen:        newJunkGenerator(opts.Jmin, opts.Jmax),
+		resendInterval: opts.ResendInterval,
 	}, true
 }
 
 type PreludeUDPConn struct {
 	UDPConn
-	origin     UDPConn
-	pool       *BufferPool
-	rulesArr   [5]Rules
-	junkCount  int
-	junkGen    *junkGenerator
-	classifier packetClassifier
+	origin         UDPConn
+	pool           *BufferPool
+	rulesArr       [5]Rules
+	junkCount      int
+	junkGen        *junkGenerator
+	state          PreludeState
+	resendInterval time.Duration
 }
 
 func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
-	if c.classifier.MatchesInitiationHeader(b) {
+	state := &c.state
+	if state.ClaimSend(time.Now(), c.resendInterval) {
 		buf := c.pool.Get()
 		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(nil),
@@ -109,11 +151,13 @@ func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn 
 			w.Reset(buf)
 			if err = rules.Write(&w, &ctx); err != nil {
 				c.pool.Put(buf)
+				state.Reset()
 				return 0, 0, err
 			}
 
 			if _, _, err = c.origin.WriteMsgUDP(w.Bytes(), oob, addr); err != nil {
 				c.pool.Put(buf)
+				state.Reset()
 				return 0, 0, err
 			}
 		}
@@ -122,6 +166,7 @@ func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn 
 			junk := c.junkGen.generate(buf)
 			if _, _, err = c.origin.WriteMsgUDP(junk, oob, addr); err != nil {
 				c.pool.Put(buf)
+				state.Reset()
 				return 0, 0, err
 			}
 		}
@@ -138,6 +183,17 @@ func NewPreludeConn(
 	framedOpts FramedOpts,
 	opts PreludeOpts,
 ) (c *PreludeConn, ok bool) {
+	return NewPreludeConnWithState(conn, pool, framedOpts, opts, nil, false)
+}
+
+func NewPreludeConnWithState(
+	conn StreamRecordConn,
+	pool *sync.Pool,
+	framedOpts FramedOpts,
+	opts PreludeOpts,
+	state *PreludeState,
+	emitOutbound bool,
+) (c *PreludeConn, ok bool) {
 	if !opts.HasDecoyRules() || !conn.CanReadRecord() || !conn.CanWriteRecord() {
 		return nil, false
 	}
@@ -148,6 +204,9 @@ func NewPreludeConn(
 		StreamRecordConn: conn,
 		pool:             WrapBufferPool(pool),
 		rulesArr:         opts.RulesArr,
+		resendInterval:   opts.ResendInterval,
+		state:            state,
+		emitOutbound:     emitOutbound,
 		recordEncoding:   enc,
 	}, true
 }
@@ -156,15 +215,14 @@ type PreludeConn struct {
 	StreamRecordConn
 	pool           *BufferPool
 	rulesArr       [5]Rules
+	resendInterval time.Duration
+	state          *PreludeState
+	emitOutbound   bool
 	recordEncoding frameEncoding
 	seenValid      bool
 }
 
 func (c *PreludeConn) Read(b []byte) (n int, err error) {
-	if c.seenValid {
-		return c.StreamRecordConn.ReadRecord(b)
-	}
-
 	for {
 		n, err = c.StreamRecordConn.ReadRecord(b)
 		if err != nil {
@@ -191,8 +249,9 @@ func (c *PreludeConn) isPreludeRecord(b []byte) bool {
 }
 
 func (c *PreludeConn) Write(b []byte) (n int, err error) {
-	if c.recordEncoding.IsInitiationRecord(b) {
+	if c.emitOutbound && c.state != nil && c.state.ClaimSend(time.Now(), c.resendInterval) {
 		if err := c.writePreludeRecords(); err != nil {
+			c.state.Reset()
 			return 0, err
 		}
 	}
@@ -234,7 +293,7 @@ func NewPreludeBatchConn(
 	origin BatchConn,
 	bufPool *sync.Pool,
 	msgsPool *sync.Pool,
-	header *RangedHeader,
+	_ *RangedHeader,
 	opts PreludeOpts,
 ) (c *PreludeBatchConn, ok bool) {
 	if opts.IsEmpty() {
@@ -246,40 +305,37 @@ func NewPreludeBatchConn(
 	}
 
 	return &PreludeBatchConn{
-		BatchConn: conn,
-		origin:    origin,
-		bufPool:   WrapBufferPool(bufPool),
-		msgsPool:  msgsPool,
-		rulesArr:  opts.RulesArr,
-		junkCount: opts.Jc,
-		junkGen:   newJunkGenerator(opts.Jmin, opts.Jmax),
-		classifier: newPacketClassifier(FramedOpts{
-			H1:           header,
-			HeaderCompat: header != nil,
-		}),
+		BatchConn:      conn,
+		origin:         origin,
+		bufPool:        WrapBufferPool(bufPool),
+		msgsPool:       msgsPool,
+		rulesArr:       opts.RulesArr,
+		junkCount:      opts.Jc,
+		junkGen:        newJunkGenerator(opts.Jmin, opts.Jmax),
+		resendInterval: opts.ResendInterval,
 	}, true
 }
 
 type PreludeBatchConn struct {
 	BatchConn
-	origin     BatchConn
-	bufPool    *BufferPool
-	msgsPool   *sync.Pool
-	rulesArr   [5]Rules
-	junkCount  int
-	junkGen    *junkGenerator
-	classifier packetClassifier
+	origin         BatchConn
+	bufPool        *BufferPool
+	msgsPool       *sync.Pool
+	rulesArr       [5]Rules
+	junkCount      int
+	junkGen        *junkGenerator
+	state          PreludeState
+	resendInterval time.Duration
 }
 
 func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err error) {
-	var initMsg *ipv4.Message
-	for i := range ms {
-		if c.classifier.MatchesInitiationHeader(ms[i].Buffers[0]) {
-			initMsg = &ms[i]
-		}
+	if len(ms) == 0 {
+		return c.BatchConn.WriteBatch(ms, flags)
 	}
 
-	if initMsg != nil {
+	preludeMsg := &ms[0]
+	state := &c.state
+	if state.ClaimSend(time.Now(), c.resendInterval) {
 		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(nil),
 			BufferPool: c.bufPool,
@@ -315,12 +371,13 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 					c.bufPool.Put(pooledBuf)
 				}
 				c.msgsPool.Put(msgs)
+				state.Reset()
 				return 0, err
 			}
 
 			(*msgs)[i].Buffers[0] = w.Bytes()
-			(*msgs)[i].OOB = initMsg.OOB
-			(*msgs)[i].Addr = initMsg.Addr
+			(*msgs)[i].OOB = preludeMsg.OOB
+			(*msgs)[i].Addr = preludeMsg.Addr
 			i++
 		}
 
@@ -329,8 +386,8 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 			pooled = append(pooled, buf)
 
 			(*msgs)[i].Buffers[0] = c.junkGen.generate(buf)
-			(*msgs)[i].OOB = initMsg.OOB
-			(*msgs)[i].Addr = initMsg.Addr
+			(*msgs)[i].OOB = preludeMsg.OOB
+			(*msgs)[i].Addr = preludeMsg.Addr
 			i++
 		}
 
@@ -343,6 +400,7 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 					c.bufPool.Put(pooledBuf)
 				}
 				c.msgsPool.Put(msgs)
+				state.Reset()
 				return 0, err
 			}
 			if n == len(m) {

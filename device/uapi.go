@@ -110,6 +110,8 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("jmax=%d", device.net.preludeOpts.Jmax)
 		}
 
+		sendf("prelude_resend_interval=%d", int64(device.net.preludeOpts.ResendInterval/time.Second))
+
 		if device.net.framedOpts.S1 != 0 {
 			sendf("s1=%d", device.net.framedOpts.S1)
 		}
@@ -362,6 +364,19 @@ func (device *Device) handleDeviceLine(key, value string) error {
 
 		if err := device.BindUpdate(); err != nil {
 			return ipcErrorf(ipc.IpcErrorPortInUse, "failed to set junk max: %w", err)
+		}
+
+	case "prelude_resend_interval":
+		secs, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse prelude_resend_interval: %w", err)
+		}
+
+		device.log.Verbosef("UAPI: Updating prelude resend interval")
+		device.net.preludeOpts.ResendInterval = time.Duration(secs) * time.Second
+
+		if err := device.BindUpdate(); err != nil {
+			return ipcErrorf(ipc.IpcErrorPortInUse, "failed to set prelude resend interval: %w", err)
 		}
 
 	case "s1":

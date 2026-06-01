@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/conceal"
 )
@@ -88,6 +89,7 @@ func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 
 		pipeline := b.currentPipeline()
 		if pipeline == nil || !pipeline.Active() {
+			wrapPreludeEndpoints(eps[:n])
 			return n, nil
 		}
 
@@ -113,8 +115,15 @@ func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 			}
 
 			sizes[i] = size
+			eps[i] = wrapPreludeEndpoint(eps[i])
 		}
 		return n, nil
+	}
+}
+
+func wrapPreludeEndpoints(eps []Endpoint) {
+	for i, ep := range eps {
+		eps[i] = wrapPreludeEndpoint(ep)
 	}
 }
 
@@ -129,10 +138,33 @@ func (b *ConcealBind) SetMark(mark uint32) error {
 	return b.inner.SetMark(mark)
 }
 
+func (b *ConcealBind) preludeState(ep Endpoint) *conceal.PreludeState {
+	if ep == nil {
+		return nil
+	}
+	if preludeEP, ok := ep.(PreludeEndpoint); ok {
+		return preludeEP.PreludeState()
+	}
+	return nil
+}
+
+func (b *ConcealBind) resetPreludeState(ep Endpoint) {
+	if ep == nil {
+		return
+	}
+	if preludeEP, ok := ep.(PreludeEndpoint); ok {
+		preludeEP.ResetPreludeState()
+	}
+}
+
 func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
+	if len(bufs) == 0 {
+		return nil
+	}
+
 	pipeline := b.currentPipeline()
 	if pipeline == nil || !pipeline.Active() {
-		return b.inner.Send(bufs, ep)
+		return b.inner.Send(bufs, unwrapEndpoint(ep))
 	}
 
 	batchSize := b.inner.BatchSize()
@@ -165,7 +197,7 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 		if len(batch) == 0 {
 			return nil
 		}
-		err := b.inner.Send(batch, ep)
+		err := b.inner.Send(batch, unwrapEndpoint(ep))
 		putRetained()
 		clearBatch()
 		return err
@@ -192,13 +224,17 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 		return nil
 	}
 
-	for _, buf := range bufs {
-		if err := pipeline.EmitPrelude(buf, func(packet []byte) error {
+	preludeState := b.preludeState(ep)
+	if pipeline.PreludeActive() && preludeState != nil && preludeState.ClaimSend(time.Now(), pipeline.PreludeResendInterval()) {
+		if err := pipeline.EmitPrelude(func(packet []byte) error {
 			return appendPacket(bytes.Clone(packet), nil)
 		}); err != nil {
+			b.resetPreludeState(ep)
 			return err
 		}
+	}
 
+	for _, buf := range bufs {
 		encoded := b.bufPool.Get().([]byte)
 		n, err := pipeline.Encode(encoded, buf)
 		if err != nil {
@@ -214,7 +250,13 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 }
 
 func (b *ConcealBind) ParseEndpoint(s string) (Endpoint, error) {
-	return b.inner.ParseEndpoint(s)
+	ep, err := b.inner.ParseEndpoint(s)
+	if err != nil {
+		return nil, err
+	}
+	ep = wrapPreludeEndpoint(ep)
+	b.resetPreludeState(ep)
+	return ep, nil
 }
 
 func (b *ConcealBind) BatchSize() int {
@@ -357,7 +399,7 @@ func (s *concealBindFallbackSession) relay() {
 		if err != nil {
 			return
 		}
-		if err := s.parent.inner.Send([][]byte{buf[:n]}, s.ep); err != nil {
+		if err := s.parent.inner.Send([][]byte{buf[:n]}, unwrapEndpoint(s.ep)); err != nil {
 			return
 		}
 	}
