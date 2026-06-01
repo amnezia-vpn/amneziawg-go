@@ -129,32 +129,12 @@ type PreludeUDPConn struct {
 	rulesArr       [5]Rules
 	junkCount      int
 	junkGen        *junkGenerator
-	statesMu       sync.Mutex
-	states         map[string]*PreludeState
+	state          PreludeState
 	resendInterval time.Duration
 }
 
-func (c *PreludeUDPConn) preludeState(addr net.Addr) *PreludeState {
-	key := ""
-	if addr != nil {
-		key = addr.String()
-	}
-
-	c.statesMu.Lock()
-	defer c.statesMu.Unlock()
-	if c.states == nil {
-		c.states = make(map[string]*PreludeState)
-	}
-	state := c.states[key]
-	if state == nil {
-		state = new(PreludeState)
-		c.states[key] = state
-	}
-	return state
-}
-
 func (c *PreludeUDPConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
-	state := c.preludeState(addr)
+	state := &c.state
 	if state.ClaimSend(time.Now(), c.resendInterval) {
 		buf := c.pool.Get()
 		ctx := writeContext{
@@ -344,28 +324,8 @@ type PreludeBatchConn struct {
 	rulesArr       [5]Rules
 	junkCount      int
 	junkGen        *junkGenerator
-	statesMu       sync.Mutex
-	states         map[string]*PreludeState
+	state          PreludeState
 	resendInterval time.Duration
-}
-
-func (c *PreludeBatchConn) preludeState(addr net.Addr) *PreludeState {
-	key := ""
-	if addr != nil {
-		key = addr.String()
-	}
-
-	c.statesMu.Lock()
-	defer c.statesMu.Unlock()
-	if c.states == nil {
-		c.states = make(map[string]*PreludeState)
-	}
-	state := c.states[key]
-	if state == nil {
-		state = new(PreludeState)
-		c.states[key] = state
-	}
-	return state
 }
 
 func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err error) {
@@ -374,7 +334,7 @@ func (c *PreludeBatchConn) WriteBatch(ms []ipv4.Message, flags int) (n int, err 
 	}
 
 	preludeMsg := &ms[0]
-	state := c.preludeState(preludeMsg.Addr)
+	state := &c.state
 	if state.ClaimSend(time.Now(), c.resendInterval) {
 		ctx := writeContext{
 			FlexBuffer: WrapFlexBuffer(nil),

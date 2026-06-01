@@ -32,7 +32,6 @@ type ConcealBind struct {
 	fallbackPort   uint16
 
 	fallbackSessions map[string]*concealBindFallbackSession
-	preludeStates    map[string]*conceal.PreludeState
 
 	pipeline atomic.Pointer[conceal.UDPDatagramPipeline]
 }
@@ -90,6 +89,7 @@ func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 
 		pipeline := b.currentPipeline()
 		if pipeline == nil || !pipeline.Active() {
+			wrapPreludeEndpoints(eps[:n])
 			return n, nil
 		}
 
@@ -115,8 +115,15 @@ func (b *ConcealBind) wrapReceiveFunc(fn ReceiveFunc) ReceiveFunc {
 			}
 
 			sizes[i] = size
+			eps[i] = wrapPreludeEndpoint(eps[i])
 		}
 		return n, nil
+	}
+}
+
+func wrapPreludeEndpoints(eps []Endpoint) {
+	for i, ep := range eps {
+		eps[i] = wrapPreludeEndpoint(ep)
 	}
 }
 
@@ -138,19 +145,7 @@ func (b *ConcealBind) preludeState(ep Endpoint) *conceal.PreludeState {
 	if preludeEP, ok := ep.(PreludeEndpoint); ok {
 		return preludeEP.PreludeState()
 	}
-
-	key := ep.DstToString()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.preludeStates == nil {
-		b.preludeStates = make(map[string]*conceal.PreludeState)
-	}
-	state := b.preludeStates[key]
-	if state == nil {
-		state = new(conceal.PreludeState)
-		b.preludeStates[key] = state
-	}
-	return state
+	return nil
 }
 
 func (b *ConcealBind) resetPreludeState(ep Endpoint) {
@@ -159,15 +154,7 @@ func (b *ConcealBind) resetPreludeState(ep Endpoint) {
 	}
 	if preludeEP, ok := ep.(PreludeEndpoint); ok {
 		preludeEP.ResetPreludeState()
-		return
 	}
-
-	key := ep.DstToString()
-	b.mu.Lock()
-	if state := b.preludeStates[key]; state != nil {
-		state.Reset()
-	}
-	b.mu.Unlock()
 }
 
 func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
@@ -177,7 +164,7 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 
 	pipeline := b.currentPipeline()
 	if pipeline == nil || !pipeline.Active() {
-		return b.inner.Send(bufs, ep)
+		return b.inner.Send(bufs, unwrapEndpoint(ep))
 	}
 
 	batchSize := b.inner.BatchSize()
@@ -210,7 +197,7 @@ func (b *ConcealBind) Send(bufs [][]byte, ep Endpoint) error {
 		if len(batch) == 0 {
 			return nil
 		}
-		err := b.inner.Send(batch, ep)
+		err := b.inner.Send(batch, unwrapEndpoint(ep))
 		putRetained()
 		clearBatch()
 		return err
@@ -267,6 +254,7 @@ func (b *ConcealBind) ParseEndpoint(s string) (Endpoint, error) {
 	if err != nil {
 		return nil, err
 	}
+	ep = wrapPreludeEndpoint(ep)
 	b.resetPreludeState(ep)
 	return ep, nil
 }
@@ -411,7 +399,7 @@ func (s *concealBindFallbackSession) relay() {
 		if err != nil {
 			return
 		}
-		if err := s.parent.inner.Send([][]byte{buf[:n]}, s.ep); err != nil {
+		if err := s.parent.inner.Send([][]byte{buf[:n]}, unwrapEndpoint(s.ep)); err != nil {
 			return
 		}
 	}

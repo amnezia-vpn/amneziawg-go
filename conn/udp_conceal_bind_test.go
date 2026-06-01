@@ -92,6 +92,29 @@ func TestConcealBindNoOpWithoutOpts(t *testing.T) {
 	}
 }
 
+func TestConcealBindNoOpUnwrapsNonPreludeEndpoint(t *testing.T) {
+	inner := &rawPacketBind{
+		fakePacketBind: fakePacketBind{batchSize: 3},
+	}
+	bind := NewConcealBind(inner)
+
+	endpoint, err := bind.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	if _, ok := endpoint.(PreludeEndpoint); !ok {
+		t.Fatalf("parsed endpoint does not carry prelude state")
+	}
+
+	transport := makeTransportPacket()
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if inner.badEndpoint {
+		t.Fatalf("inner bind received wrapped endpoint, want raw endpoint")
+	}
+}
+
 func TestConcealBindSendBatchesActivePipeline(t *testing.T) {
 	inner := &fakePacketBind{batchSize: 3}
 	bind := NewConcealBind(inner)
@@ -265,6 +288,52 @@ func TestConcealBindPreludePositiveResendIntervalForcesResend(t *testing.T) {
 	}
 	if got := wireHeader(t, wirePackets[3]); got != 779 {
 		t.Fatalf("second transport header = %d, want 779", got)
+	}
+}
+
+func TestConcealBindWrapsNonPreludeEndpointAndUnwrapsForInnerBind(t *testing.T) {
+	inner := &rawPacketBind{
+		fakePacketBind: fakePacketBind{batchSize: 8},
+	}
+	bind := NewConcealBind(inner)
+	bind.SetFramedOpts(conceal.FramedOpts{H4: mustHeader(t, "779")})
+	bind.SetPreludeOpts(conceal.PreludeOpts{
+		ResendInterval: 0,
+		RulesArr: [5]conceal.Rules{
+			mustParseRules(t, "<b 0xaabb>"),
+		},
+	})
+
+	endpoint, err := bind.ParseEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("parse endpoint: %v", err)
+	}
+	if _, ok := endpoint.(PreludeEndpoint); !ok {
+		t.Fatalf("parsed endpoint does not carry prelude state")
+	}
+
+	transport := makeTransportPacket()
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if err := bind.Send([][]byte{transport}, endpoint); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	if inner.badEndpoint {
+		t.Fatalf("inner bind received wrapped endpoint, want raw endpoint")
+	}
+
+	wirePackets := flattenSendCalls(inner.sendCalls)
+	if len(wirePackets) != 3 {
+		t.Fatalf("wire packet count = %d, want 3", len(wirePackets))
+	}
+	if !bytes.Equal(wirePackets[0], []byte{0xaa, 0xbb}) {
+		t.Fatalf("wire prelude = %x, want aabb", wirePackets[0])
+	}
+	for i, call := range inner.sendCalls {
+		if _, ok := call.endpoint.(*rawPacketEndpoint); !ok {
+			t.Fatalf("send call %d endpoint = %T, want *rawPacketEndpoint", i, call.endpoint)
+		}
 	}
 }
 
@@ -665,6 +734,53 @@ func (e *fakePacketEndpoint) SrcIP() netip.Addr {
 	return netip.Addr{}
 }
 
+type rawPacketBind struct {
+	fakePacketBind
+	badEndpoint bool
+}
+
+func (b *rawPacketBind) Send(bufs [][]byte, ep Endpoint) error {
+	if _, ok := ep.(*rawPacketEndpoint); !ok {
+		b.badEndpoint = true
+	}
+	return b.fakePacketBind.Send(bufs, ep)
+}
+
+func (b *rawPacketBind) ParseEndpoint(s string) (Endpoint, error) {
+	addr, err := netip.ParseAddrPort(s)
+	if err != nil {
+		return nil, err
+	}
+	return &rawPacketEndpoint{addr: addr}, nil
+}
+
+type rawPacketEndpoint struct {
+	addr netip.AddrPort
+}
+
+func (e *rawPacketEndpoint) ClearSrc() {}
+
+func (e *rawPacketEndpoint) SrcToString() string {
+	return ""
+}
+
+func (e *rawPacketEndpoint) DstToString() string {
+	return e.addr.String()
+}
+
+func (e *rawPacketEndpoint) DstToBytes() []byte {
+	out, _ := e.addr.MarshalBinary()
+	return out
+}
+
+func (e *rawPacketEndpoint) DstIP() netip.Addr {
+	return e.addr.Addr()
+}
+
+func (e *rawPacketEndpoint) SrcIP() netip.Addr {
+	return netip.Addr{}
+}
+
 func flattenSendCalls(calls []fakeSendCall) [][]byte {
 	var out [][]byte
 	for _, call := range calls {
@@ -691,5 +807,7 @@ func wireHeader(t *testing.T, packet []byte) uint32 {
 }
 
 var _ Bind = (*fakePacketBind)(nil)
+var _ Bind = (*rawPacketBind)(nil)
 var _ Endpoint = (*fakePacketEndpoint)(nil)
+var _ Endpoint = (*rawPacketEndpoint)(nil)
 var _ PreludeEndpoint = (*fakePacketEndpoint)(nil)
