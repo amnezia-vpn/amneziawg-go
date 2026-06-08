@@ -528,6 +528,11 @@ func splitCoalescedMessages(msgs []ipv6.Message, firstMsgAt int, getGSO getGSOFu
 			copied := copy(msgs[n].Buffers[0], msg.Buffers[0][start:end])
 			msgs[n].N = copied
 			msgs[n].Addr = msg.Addr
+			if n != i {
+				oobCopied := copy(msgs[n].OOB[:cap(msgs[n].OOB)], msg.OOB[:msg.NN])
+				msgs[n].OOB = msgs[n].OOB[:oobCopied]
+				msgs[n].NN = oobCopied
+			}
 			start = end
 			end += gsoSize
 			if end > msg.N {
