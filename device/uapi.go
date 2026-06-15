@@ -89,6 +89,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			keyf("private_key", (*[32]byte)(&device.staticIdentity.privateKey))
 		}
 
+		if device.salamanderEnabled() {
+			keyf("obfs_psk", (*[32]byte)(&device.obfsPSK))
+		}
+
 		if device.net.port != 0 {
 			sendf("listen_port=%d", device.net.port)
 		}
@@ -267,6 +271,15 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		}
 		device.log.Verbosef("UAPI: Updating private key")
 		device.SetPrivateKey(sk)
+
+	case "obfs_psk":
+		var obfsPSK NoisePresharedKey
+		err := obfsPSK.FromHex(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set obfs_psk: %w", err)
+		}
+		device.log.Verbosef("UAPI: Updating obfs psk")
+		device.obfsPSK = obfsPSK
 
 	case "listen_port":
 		port, err := strconv.ParseUint(value, 10, 16)

@@ -110,6 +110,8 @@ type Device struct {
 		transport int
 	}
 
+	obfsPSK NoisePresharedKey
+
 	ipackets [5]*obfChain
 }
 

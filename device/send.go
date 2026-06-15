@@ -250,6 +250,14 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		packet = buf
 	}
 
+	if device.salamanderEnabled() {
+		obfuscated, err := device.salamanderObfuscate(packet)
+		if err != nil {
+			return err
+		}
+		packet = obfuscated
+	}
+
 	// TODO: allocation could be avoided
 	device.net.bind.Send([][]byte{packet}, initiatingElem.endpoint)
 	return nil

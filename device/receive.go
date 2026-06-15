@@ -131,12 +131,16 @@ func (device *Device) RoutineReceiveIncoming(
 
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
-			if size < MinMessageSize {
+			packet := bufsArrs[i][:size]
+			var ok bool
+			packet, ok = device.salamanderDeobfuscate(packet)
+			if !ok {
 				continue
 			}
 
-			// check size of packet
-			packet := bufsArrs[i][:size]
+			if len(packet) < MinMessageSize {
+				continue
+			}
 
 			// get message padding and type based on information from S1-S4 and H1-H4
 			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
