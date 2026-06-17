@@ -85,6 +85,9 @@ func newObfChain(spec string) (*obfChain, error) {
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
+	if len(obfs) == 0 {
+		return nil, nil
+	}
 
 	return &obfChain{
 		Spec: spec,
