@@ -169,6 +169,13 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	err = peer.SendBuffers(sendBuffer)
 	if err != nil {
+		var errGSO conn.ErrUDPGSODisabled
+		if errors.As(err, &errGSO) {
+			peer.device.log.Verbosef(err.Error())
+			err = errGSO.RetryErr
+		}
+	}
+	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
 	}
 	peer.timersHandshakeInitiated()
@@ -215,6 +222,13 @@ func (peer *Peer) SendHandshakeResponse() error {
 
 	// TODO: allocation could be avoided
 	err = peer.SendBuffers([][]byte{packet})
+	if err != nil {
+		var errGSO conn.ErrUDPGSODisabled
+		if errors.As(err, &errGSO) {
+			peer.device.log.Verbosef(err.Error())
+			err = errGSO.RetryErr
+		}
+	}
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake response: %v", peer, err)
 	}
