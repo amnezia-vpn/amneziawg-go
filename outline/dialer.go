@@ -6,10 +6,10 @@ import (
 	"net"
 	"net/netip"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/amnezia-vpn/amneziawg-go/conn"
 	"github.com/amnezia-vpn/amneziawg-go/device"
 	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
+	"golang.getoutline.org/sdk/transport"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
