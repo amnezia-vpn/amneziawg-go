@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Jigsaw-Code/outline-sdk/transport"
-	"github.com/Jigsaw-Code/outline-sdk/x/mobileproxy"
-	"github.com/Jigsaw-Code/outline-sdk/x/smart"
 	"github.com/goccy/go-yaml"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/x/mobileproxy"
+	"golang.getoutline.org/sdk/x/smart"
 )
 
 type DeviceConfig struct {
