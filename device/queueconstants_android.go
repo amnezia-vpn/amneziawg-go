@@ -10,10 +10,13 @@ import "github.com/amnezia-vpn/amneziawg-go/conn"
 /* Reduce memory consumption for Android */
 
 const (
-	QueueStagedSize            = conn.IdealBatchSize
-	QueueOutboundSize          = 1024
-	QueueInboundSize           = 1024
-	QueueHandshakeSize         = 1024
-	MaxSegmentSize             = (1 << 16) - 1 // largest possible UDP datagram
-	PreallocatedBuffersPerPool = 4096
+	QueueStagedSize    = conn.IdealBatchSize
+	QueueOutboundSize  = 1024
+	QueueInboundSize   = 1024
+	QueueHandshakeSize = 1024
+	MaxSegmentSize     = (1 << 16) - 1 // largest possible UDP datagram
 )
+
+// A var instead of a const (like on ios) so embedders can adjust the bound
+// to their memory budget before calling NewDevice.
+var PreallocatedBuffersPerPool uint32 = 4096
