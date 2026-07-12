@@ -6,10 +6,14 @@
 package device
 
 const (
-	QueueStagedSize            = 128
-	QueueOutboundSize          = 1024
-	QueueInboundSize           = 1024
-	QueueHandshakeSize         = 1024
-	MaxSegmentSize             = 2048 - 32 // largest possible UDP datagram
-	PreallocatedBuffersPerPool = 0         // Disable and allow for infinite memory growth
+	QueueStagedSize    = 128
+	QueueOutboundSize  = 1024
+	QueueInboundSize   = 1024
+	QueueHandshakeSize = 1024
+	MaxSegmentSize     = 2048 - 32 // largest possible UDP datagram
 )
+
+// A var instead of a const (like on ios) so embedders can adjust the bound
+// to their memory budget before calling NewDevice.
+// 0 keeps the default behavior: disable and allow for infinite memory growth.
+var PreallocatedBuffersPerPool uint32 = 0
