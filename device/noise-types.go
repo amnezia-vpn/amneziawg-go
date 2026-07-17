@@ -123,8 +123,7 @@ func (h *headerCipherImpl) Apply(data []byte) {
 func (h *headerCipherImpl) Crypt(data []byte) []byte {
 	res := make([]byte, len(data))
 	for i := range data {
-		res[i] = data[i] ^ h.hash[h.bytesUsed]
-		h.bytesUsed++
+		res[i] = data[i] ^ h.hash[i]
 	}
 	return res
 }
