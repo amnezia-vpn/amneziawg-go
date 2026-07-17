@@ -83,6 +83,12 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		device.peers.RLock()
 		defer device.peers.RUnlock()
 
+		device.headerProtection.RLock()
+		defer device.headerProtection.RUnlock()
+
+		device.timings.RLock()
+		defer device.timings.RUnlock()
+
 		// serialize device related values
 
 		if !device.staticIdentity.privateKey.IsZero() {
@@ -145,6 +151,18 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			if ipacket != nil {
 				sendf("i%d=%s", i+1, ipacket.Spec)
 			}
+		}
+
+		if !device.headerProtection.key.IsZero() {
+			keyf("header_protection_key", (*[32]byte)(&device.headerProtection.key))
+		}
+
+		if device.randomTrailingSizeMax != 0 {
+			sendf("random_trailing_size_max=%d", device.randomTrailingSizeMax)
+		}
+
+		if timing := device.timings.rekeyAfterTimeSec; timing.IsZero() {
+			sendf("rekey_after_time=%s", timing.ToString())
 		}
 
 		for _, peer := range device.peers.keyMap {
@@ -446,6 +464,40 @@ func (device *Device) handleDeviceLine(key, value string) error {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
 		}
 		device.ipackets[4] = chain
+
+	case "header_protection_key":
+		var key HeaderCipherKey
+		err := key.FromHex(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set header_protection_key: %w", err)
+		}
+		device.log.Verbosef("UAPI: Updating header protection key")
+
+		device.headerProtection.Lock()
+		defer device.headerProtection.Unlock()
+		device.headerProtection.key = key
+
+	case "random_trailing_size_max":
+		randomTrailingSizeMax, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse random_trailing_size_max: %w", err)
+		}
+		if randomTrailingSizeMax < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "random_trailing_size_max must be non-negative")
+		}
+
+		device.log.Verbosef("UAPI: Updating random_trailing_size_max")
+		device.randomTrailingSizeMax = randomTrailingSizeMax
+
+	case "rekey_after_time":
+		var rang IntRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse rekey_after_time: %w", err)
+		}
+
+		device.timings.Lock()
+		defer device.timings.Unlock()
+		device.timings.rekeyAfterTimeSec = rang
 
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)

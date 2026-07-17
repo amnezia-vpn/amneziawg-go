@@ -9,12 +9,19 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"golang.org/x/crypto/blake2s"
 )
 
 const (
 	NoisePublicKeySize    = 32
 	NoisePrivateKeySize   = 32
 	NoisePresharedKeySize = 32
+	HeaderCipherKeySize   = 32
+	HeaderCipherSaltSize  = 8
 )
 
 type (
@@ -22,6 +29,7 @@ type (
 	NoisePrivateKey   [NoisePrivateKeySize]byte
 	NoisePresharedKey [NoisePresharedKeySize]byte
 	NoiseNonce        uint64 // padded to 12-bytes
+	HeaderCipherKey   [HeaderCipherKeySize]byte
 )
 
 func loadExactHex(dst []byte, src string) error {
@@ -75,4 +83,96 @@ func (key NoisePublicKey) Equals(tar NoisePublicKey) bool {
 
 func (key *NoisePresharedKey) FromHex(src string) error {
 	return loadExactHex(key[:], src)
+}
+
+func (key HeaderCipherKey) IsZero() bool {
+	var zero HeaderCipherKey
+	return key.Equals(zero)
+}
+
+func (key HeaderCipherKey) Equals(tar HeaderCipherKey) bool {
+	return subtle.ConstantTimeCompare(key[:], tar[:]) == 1
+}
+
+func (key *HeaderCipherKey) FromHex(src string) error {
+	return loadExactHex(key[:], src)
+}
+
+var (
+	_ (HeaderCipher) = (*headerCipherImpl)(nil)
+	_ (HeaderCipher) = (*headerCipherStub)(nil)
+)
+
+type HeaderCipher interface {
+	Apply(data []byte)
+	Crypt(data []byte) []byte
+}
+
+type headerCipherImpl struct {
+	hash      [blake2s.Size]byte
+	bytesUsed int
+}
+
+func (h *headerCipherImpl) Apply(data []byte) {
+	for i := range data {
+		data[i] = data[i] ^ h.hash[h.bytesUsed]
+		h.bytesUsed++
+	}
+}
+
+func (h *headerCipherImpl) Crypt(data []byte) []byte {
+	res := make([]byte, len(data))
+	for i := range data {
+		res[i] = data[i] ^ h.hash[h.bytesUsed]
+		h.bytesUsed++
+	}
+	return res
+}
+
+type headerCipherStub struct {
+}
+
+func (*headerCipherStub) Apply(data []byte) {
+
+}
+
+func (*headerCipherStub) Crypt(data []byte) []byte {
+	return data
+}
+
+type IntRange struct {
+	hi, lo int
+}
+
+func (r *IntRange) FromString(str string) error {
+	parts := strings.Split(str, "-")
+	if len(parts) != 2 {
+		return errors.New("wrong format")
+	}
+
+	lo, err := strconv.ParseInt(parts[0], 10, 32)
+	if err != nil {
+		return err
+	}
+
+	hi, err := strconv.ParseInt(parts[1], 10, 32)
+	if err != nil {
+		return err
+	}
+
+	r.lo = int(lo)
+	r.hi = int(hi)
+	return nil
+}
+
+func (r *IntRange) IsZero() bool {
+	return r.hi == 0 && r.lo == 0
+}
+
+func (r *IntRange) PickOne() int {
+	return randInt(r.lo, r.hi)
+}
+
+func (r *IntRange) ToString() string {
+	return fmt.Sprintf("%d-%d", r.lo, r.hi)
 }

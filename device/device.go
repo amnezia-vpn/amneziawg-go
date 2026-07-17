@@ -111,6 +111,17 @@ type Device struct {
 	}
 
 	ipackets [5]*obfChain
+
+	headerProtection struct {
+		sync.RWMutex
+		key HeaderCipherKey
+	}
+	randomTrailingSizeMax int
+
+	timings struct {
+		sync.RWMutex
+		rekeyAfterTimeSec IntRange
+	}
 }
 
 // deviceState represents the state of a Device.

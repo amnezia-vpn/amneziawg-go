@@ -138,8 +138,14 @@ func (device *Device) RoutineReceiveIncoming(
 			// check size of packet
 			packet := bufsArrs[i][:size]
 
+			cip, err := device.HeaderCipher(packet[:8])
+			if err != nil {
+				device.log.Errorf("Failed to initialize header cipher")
+				continue
+			}
+
 			// get message padding and type based on information from S1-S4 and H1-H4
-			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType, cip)
 			if padding > 0 {
 				copy(packet, packet[padding:])
 				packet = packet[:len(packet)-padding]
@@ -156,6 +162,7 @@ func (device *Device) RoutineReceiveIncoming(
 				if len(packet) < MessageTransportSize {
 					continue
 				}
+				device.HeaderProtectionTransport(packet, cip)
 
 				// lookup key pair
 
@@ -200,16 +207,19 @@ func (device *Device) RoutineReceiveIncoming(
 				if len(packet) != MessageInitiationSize {
 					continue
 				}
+				device.HeaderProtectInitiation(packet, cip)
 
 			case MessageResponseType:
 				if len(packet) != MessageResponseSize {
 					continue
 				}
+				device.HeaderProtectionResponse(packet, cip)
 
 			case MessageCookieReplyType:
 				if len(packet) != MessageCookieReplySize {
 					continue
 				}
+				device.HeaderProtectionCookie(packet, cip)
 
 			default:
 				device.log.Verbosef("Received message with unknown type")
@@ -560,7 +570,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 	}
 }
 
-func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32) (uint32, int) {
+func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32, cip HeaderCipher) (uint32, int) {
 	size := len(packet)
 
 	if expectedType == MessageUnknownType || expectedType == MessageInitiationType {
@@ -568,8 +578,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 		header := device.headers.init
 
 		if size == padding+MessageInitiationSize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+			headerBytes := cip.Crypt(packet[padding : padding+4])
+			if header.Validate(binary.LittleEndian.Uint32(headerBytes)) {
 				return MessageInitiationType, padding
 			}
 		}
@@ -580,8 +590,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 		header := device.headers.response
 
 		if size == padding+MessageResponseSize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+			headerBytes := cip.Crypt(packet[padding : padding+4])
+			if header.Validate(binary.LittleEndian.Uint32(headerBytes)) {
 				return MessageResponseType, padding
 			}
 		}
@@ -592,8 +602,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 		header := device.headers.cookie
 
 		if size == padding+MessageCookieReplySize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+			headerBytes := cip.Crypt(packet[padding : padding+4])
+			if header.Validate(binary.LittleEndian.Uint32(headerBytes)) {
 				return MessageCookieReplyType, padding
 			}
 		}
@@ -604,8 +614,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 		header := device.headers.transport
 
 		if size >= padding+MessageTransportHeaderSize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+			headerBytes := cip.Crypt(packet[padding : padding+4])
+			if header.Validate(binary.LittleEndian.Uint32(headerBytes)) {
 				return MessageTransportType, padding
 			}
 		}

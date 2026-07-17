@@ -1,10 +1,8 @@
 package device
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
 )
@@ -57,7 +55,5 @@ func (h *magicHeader) Validate(val uint32) bool {
 }
 
 func (h *magicHeader) Generate() uint32 {
-	high := int64(h.end - h.start + 1)
-	r, _ := rand.Int(rand.Reader, big.NewInt(high))
-	return h.start + uint32(r.Int64())
+	return randUint(h.start, h.end)
 }

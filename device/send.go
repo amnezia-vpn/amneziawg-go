@@ -10,9 +10,9 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"math/big"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -140,17 +140,19 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	jmin := peer.device.junk.min
 	jmax := peer.device.junk.max
 
-	for i := 0; i < jc; i++ {
-		nBig, _ := rand.Int(rand.Reader, big.NewInt(int64(jmax-jmin+1)))
-		n := int(nBig.Int64()) + jmin
-
-		buf := make([]byte, n)
+	for range jc {
+		buf := make([]byte, randInt(jmin, jmax))
 		rand.Read(buf)
 		sendBuffer = append(sendBuffer, buf)
 	}
 
-	var buf [MessageInitiationSize]byte
-	writer := bytes.NewBuffer(buf[:0])
+	padding := peer.device.paddings.init
+	buf := make([]byte, padding+MessageInitiationSize)
+
+	crypt := buf[:padding]
+	rand.Read(crypt)
+
+	writer := bytes.NewBuffer(buf[padding:padding])
 	binary.Write(writer, binary.LittleEndian, msg)
 	packet := writer.Bytes()
 	peer.cookieGenerator.AddMacs(packet)
@@ -158,14 +160,13 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	if padding := peer.device.paddings.init; padding > 0 {
-		buf := make([]byte, padding+len(packet))
-		rand.Read(buf[:padding])
-		copy(buf[padding:], packet)
-		packet = buf
+	cip, err := peer.device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+	if err != nil {
+		return err
 	}
+	peer.device.HeaderProtectInitiation(packet, cip)
 
-	sendBuffer = append(sendBuffer, packet)
+	sendBuffer = append(sendBuffer, buf)
 
 	err = peer.SendBuffers(sendBuffer)
 	if err != nil {
@@ -189,9 +190,13 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	var buf [MessageResponseSize]byte
-	writer := bytes.NewBuffer(buf[:0])
+	padding := peer.device.paddings.response
+	buf := make([]byte, padding+MessageResponseSize)
 
+	crypt := buf[:padding]
+	rand.Read(crypt)
+
+	writer := bytes.NewBuffer(buf[padding:padding])
 	binary.Write(writer, binary.LittleEndian, response)
 	packet := writer.Bytes()
 	peer.cookieGenerator.AddMacs(packet)
@@ -206,15 +211,14 @@ func (peer *Peer) SendHandshakeResponse() error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	if padding := peer.device.paddings.response; padding > 0 {
-		buf := make([]byte, padding+len(packet))
-		rand.Read(buf[:padding])
-		copy(buf[padding:], packet)
-		packet = buf
+	cip, err := peer.device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+	if err != nil {
+		return err
 	}
+	peer.device.HeaderProtectionResponse(packet, cip)
 
 	// TODO: allocation could be avoided
-	err = peer.SendBuffers([][]byte{packet})
+	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake response: %v", peer, err)
 	}
@@ -238,20 +242,24 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		return err
 	}
 
-	var buf [MessageCookieReplySize]byte
-	writer := bytes.NewBuffer(buf[:0])
+	padding := device.paddings.cookie
+	buf := make([]byte, padding+MessageCookieReplySize)
+
+	crypt := buf[:padding]
+	rand.Read(crypt)
+
+	writer := bytes.NewBuffer(buf[padding:padding])
 	binary.Write(writer, binary.LittleEndian, reply)
 	packet := writer.Bytes()
 
-	if padding := device.paddings.cookie; padding > 0 {
-		buf := make([]byte, padding+len(packet))
-		rand.Read(buf[:padding])
-		copy(buf[padding:], packet)
-		packet = buf
+	cip, err := device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+	if err != nil {
+		return err
 	}
+	device.HeaderProtectionCookie(packet, cip)
 
 	// TODO: allocation could be avoided
-	device.net.bind.Send([][]byte{packet}, initiatingElem.endpoint)
+	device.net.bind.Send([][]byte{buf}, initiatingElem.endpoint)
 	return nil
 }
 
@@ -261,7 +269,7 @@ func (peer *Peer) keepKeyFreshSending() {
 		return
 	}
 	nonce := keypair.sendNonce.Load()
-	if nonce > RekeyAfterMessages || (keypair.isInitiator && time.Since(keypair.created) > RekeyAfterTime) {
+	if nonce > RekeyAfterMessages || (keypair.isInitiator && time.Since(keypair.created) > peer.device.RekeyAfterTime()) {
 		peer.SendHandshakeInitiation(false)
 	}
 }
@@ -283,7 +291,7 @@ func (device *Device) RoutineReadFromTUN() {
 		elemsByPeer = make(map[*Peer]*QueueOutboundElementsContainer, batchSize)
 		count       = 0
 		sizes       = make([]int, batchSize)
-		offset      = MessageTransportHeaderSize
+		offset      = MessageTransportHeaderSize + device.paddings.transport
 	)
 
 	for i := range elems {
@@ -479,15 +487,15 @@ func (peer *Peer) FlushStagedPackets() {
 	}
 }
 
-func calculatePaddingSize(packetSize, mtu int) int {
+func calculatePaddingSize(packetSize, mtu, multiple int) int {
 	lastUnit := packetSize
 	if mtu == 0 {
-		return ((lastUnit + PaddingMultiple - 1) & ^(PaddingMultiple - 1)) - lastUnit
+		return ((lastUnit + multiple - 1) & ^(multiple - 1)) - lastUnit
 	}
 	if lastUnit > mtu {
 		lastUnit %= mtu
 	}
-	paddedSize := ((lastUnit + PaddingMultiple - 1) & ^(PaddingMultiple - 1))
+	paddedSize := ((lastUnit + multiple - 1) & ^(multiple - 1))
 	if paddedSize > mtu {
 		paddedSize = mtu
 	}
@@ -500,7 +508,6 @@ func calculatePaddingSize(packetSize, mtu int) int {
  * Obs. One instance per core
  */
 func (device *Device) RoutineEncryption(id int) {
-	var paddingZeros [PaddingMultiple]byte
 	var nonce [chacha20poly1305.NonceSize]byte
 
 	defer device.log.Verbosef("Routine: encryption worker %d - stopped", id)
@@ -508,32 +515,56 @@ func (device *Device) RoutineEncryption(id int) {
 
 	for elemsContainer := range device.queue.encryption.c {
 		for _, elem := range elemsContainer.elems {
+			padding := device.paddings.transport
+
+			// fill crypto padding
+			crypt := elem.buffer[:padding]
+			rand.Read(crypt)
+
 			// populate header fields
-			header := elem.buffer[:MessageTransportHeaderSize]
+			header := elem.buffer[padding : padding+MessageTransportHeaderSize]
 
 			fieldType := header[0:4]
 			fieldReceiver := header[4:8]
 			fieldNonce := header[8:16]
 
-			msgType := device.headers.transport.Generate()
-
-			binary.LittleEndian.PutUint32(fieldType, msgType)
+			binary.LittleEndian.PutUint32(fieldType, device.headers.transport.Generate())
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 
-			// pad content to multiple of 16
-			paddingSize := calculatePaddingSize(len(elem.packet), int(device.tun.mtu.Load()))
-			elem.packet = append(elem.packet, paddingZeros[:paddingSize]...)
+			mtu := int(device.tun.mtu.Load())
+			var paddingSize int
+			if hi := device.randomTrailingSizeMax; hi != 0 {
+				// pad content to multiple of random up to hi
+				paddingSize = calculatePaddingSize(len(elem.packet), mtu, randInt(0, hi))
+			} else {
+				// pad content to multiple of 16
+				paddingSize = calculatePaddingSize(len(elem.packet), mtu, PaddingMultiple)
+			}
+
+			// append trailing zeroes
+			oldLen := len(elem.packet)
+			elem.packet = slices.Grow(elem.packet, paddingSize)
+			elem.packet = elem.packet[:oldLen+paddingSize]
+			clear(elem.packet[oldLen:])
 
 			// encrypt content and release to consumer
 
 			binary.LittleEndian.PutUint64(nonce[4:], elem.nonce)
 			elem.packet = elem.keypair.send.Seal(
-				header,
+				elem.buffer[:padding+MessageTransportHeaderSize],
 				nonce[:],
 				elem.packet,
 				nil,
 			)
+
+			cip, err := device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+			if err != nil {
+				device.log.Errorf("Routing: header obfuscation failed - packet dropped")
+				elem.packet = nil
+				continue
+			}
+			device.HeaderProtectionTransport(header, cip)
 		}
 		elemsContainer.Unlock()
 	}
@@ -575,15 +606,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			if len(elem.packet) != MessageKeepaliveSize {
 				dataSent = true
 			}
-			if padding := device.paddings.transport; padding > 0 {
-				// elem.packet is stored at the start of elem.buffer
-				// with zero padding
-				for i := len(elem.packet) - 1; i >= 0; i-- {
-					elem.buffer[i+padding] = elem.buffer[i]
-				}
-				rand.Read(elem.buffer[:padding])
-				elem.packet = elem.buffer[:padding+len(elem.packet)]
-			}
+
 			bufs = append(bufs, elem.packet)
 		}
 

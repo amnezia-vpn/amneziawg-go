@@ -11,6 +11,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"hash"
+	"math/big"
 
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/curve25519"
@@ -105,4 +106,16 @@ func (sk *NoisePrivateKey) sharedSecret(pk NoisePublicKey) (ss [NoisePublicKeySi
 		return ss, errInvalidPublicKey
 	}
 	return ss, nil
+}
+
+func randInt(lo, hi int) int {
+	diff := int64(hi - lo + 1)
+	r, _ := rand.Int(rand.Reader, big.NewInt(diff))
+	return lo + int(r.Int64())
+}
+
+func randUint(lo, hi uint32) uint32 {
+	diff := int64(hi - lo + 1)
+	r, _ := rand.Int(rand.Reader, big.NewInt(diff))
+	return lo + uint32(r.Int64())
 }

@@ -626,3 +626,70 @@ func (peer *Peer) ReceivedWithKeypair(receivedKeypair *Keypair) bool {
 	keypairs.next.Store(nil)
 	return true
 }
+
+func (device *Device) HeaderCipher(salt []byte) (HeaderCipher, error) {
+	device.headerProtection.RLock()
+	defer device.headerProtection.RUnlock()
+
+	if device.headerProtection.key.IsZero() {
+		return &headerCipherStub{}, nil
+	}
+
+	hash, err := blake2s.New256(device.headerProtection.key[:])
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err = hash.Write(salt); err != nil {
+		return nil, err
+	}
+
+	return &headerCipherImpl{hash: [blake2s.Size]byte(hash.Sum(nil))}, nil
+}
+
+func (device *Device) HeaderProtectInitiation(packet []byte, cip HeaderCipher) {
+	fieldType := packet[:4]
+	fieldSender := packet[4:8]
+
+	cip.Apply(fieldType)
+	cip.Apply(fieldSender)
+}
+
+func (device *Device) HeaderProtectionResponse(packet []byte, cip HeaderCipher) {
+	fieldType := packet[0:4]
+	fieldSender := packet[4:8]
+	fieldReceiver := packet[8:12]
+
+	cip.Apply(fieldType)
+	cip.Apply(fieldSender)
+	cip.Apply(fieldReceiver)
+}
+
+func (device *Device) HeaderProtectionCookie(packet []byte, cip HeaderCipher) {
+	fieldType := packet[0:4]
+	fieldReceiver := packet[4:8]
+
+	cip.Apply(fieldType)
+	cip.Apply(fieldReceiver)
+}
+
+func (device *Device) HeaderProtectionTransport(packet []byte, cip HeaderCipher) {
+	fieldType := packet[0:4]
+	fieldReceiver := packet[4:8]
+	fieldNonce := packet[8:16]
+
+	cip.Apply(fieldType)
+	cip.Apply(fieldReceiver)
+	cip.Apply(fieldNonce)
+}
+
+func (device *Device) RekeyAfterTime() time.Duration {
+	device.timings.RLock()
+	defer device.timings.RUnlock()
+
+	rekeyAfterTime := RekeyAfterTime
+	if timing := device.timings.rekeyAfterTimeSec; !timing.IsZero() {
+		rekeyAfterTime = time.Second * time.Duration(timing.PickOne())
+	}
+	return rekeyAfterTime
+}
