@@ -490,7 +490,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		device.randomTrailingSizeMax = randomTrailingSizeMax
 
 	case "rekey_after_time":
-		var rang IntRange
+		var rang UintRange
 		if err := rang.FromString(value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse rekey_after_time: %w", err)
 		}

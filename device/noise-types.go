@@ -140,11 +140,11 @@ func (*headerCipherStub) Crypt(data []byte) []byte {
 	return data
 }
 
-type IntRange struct {
-	hi, lo int
+type UintRange struct {
+	hi, lo uint32
 }
 
-func (r *IntRange) FromString(str string) error {
+func (r *UintRange) FromString(str string) error {
 	parts := strings.Split(str, "-")
 	if len(parts) != 2 {
 		return errors.New("wrong format")
@@ -160,19 +160,19 @@ func (r *IntRange) FromString(str string) error {
 		return err
 	}
 
-	r.lo = int(lo)
-	r.hi = int(hi)
+	r.lo = uint32(lo)
+	r.hi = uint32(hi)
 	return nil
 }
 
-func (r *IntRange) IsZero() bool {
+func (r *UintRange) IsZero() bool {
 	return r.hi == 0 && r.lo == 0
 }
 
-func (r *IntRange) PickOne() int {
-	return randInt(r.lo, r.hi)
+func (r *UintRange) PickOne() uint32 {
+	return randUint(r.lo, r.hi)
 }
 
-func (r *IntRange) ToString() string {
+func (r *UintRange) ToString() string {
 	return fmt.Sprintf("%d-%d", r.lo, r.hi)
 }

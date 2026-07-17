@@ -120,7 +120,7 @@ type Device struct {
 
 	timings struct {
 		sync.RWMutex
-		rekeyAfterTimeSec IntRange
+		rekeyAfterTimeSec UintRange
 	}
 }
 
