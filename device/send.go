@@ -491,15 +491,26 @@ func (peer *Peer) FlushStagedPackets() {
 	}
 }
 
+func roundUp(n, m int) int {
+	if m <= 1 {
+		return n
+	}
+	remainder := n % m
+	if remainder == 0 {
+		return n
+	}
+	return n + (m - remainder)
+}
+
 func calculatePaddingSize(packetSize, mtu, multiple int) int {
 	lastUnit := packetSize
 	if mtu == 0 {
-		return ((lastUnit + multiple - 1) & ^(multiple - 1)) - lastUnit
+		return roundUp(lastUnit, multiple) - lastUnit
 	}
 	if lastUnit > mtu {
 		lastUnit %= mtu
 	}
-	paddedSize := ((lastUnit + multiple - 1) & ^(multiple - 1))
+	paddedSize := roundUp(lastUnit, multiple)
 	if paddedSize > mtu {
 		paddedSize = mtu
 	}
@@ -538,7 +549,7 @@ func (device *Device) RoutineEncryption(id int) {
 			var paddingSize int
 			if hi := device.randomTrailingSizeMax; hi != 0 {
 				// pad content to multiple of random up to hi
-				paddingSize = calculatePaddingSize(len(elem.packet), mtu, randInt(0, hi))
+				paddingSize = calculatePaddingSize(len(elem.packet), mtu, randInt(1, hi))
 			} else {
 				// pad content to multiple of 16
 				paddingSize = calculatePaddingSize(len(elem.packet), mtu, PaddingMultiple)
