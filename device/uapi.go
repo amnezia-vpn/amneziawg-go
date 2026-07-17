@@ -161,7 +161,7 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("random_trailing_size_max=%d", device.randomTrailingSizeMax)
 		}
 
-		if timing := device.timings.rekeyAfterTimeSec; timing.IsZero() {
+		if timing := device.timings.rekeyAfterTimeSec; !timing.IsZero() {
 			sendf("rekey_after_time=%s", timing.ToString())
 		}
 
