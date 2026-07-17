@@ -216,6 +216,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 	}()
 
 	ipcDev := new(ipcSetDevice)
+	ipcDev.fromDevice(device)
 	peer := new(ipcSetPeer)
 	deviceConfig := true
 
@@ -255,7 +256,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 
 		var err error
 		if deviceConfig {
-			err = device.handleDeviceLine(key, value)
+			err = device.handleDeviceLine(ipcDev, key, value)
 		} else {
 			err = device.handlePeerLine(peer, key, value)
 		}
@@ -275,7 +276,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 	return nil
 }
 
-func (device *Device) handleDeviceLine(key, value string) error {
+func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) error {
 	switch key {
 	case "private_key":
 		var sk NoisePrivateKey
@@ -366,8 +367,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		if padding < 0 {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s1 must be non-negative")
 		}
-		device.log.Verbosef("UAPI: Updating s1 padding")
-		device.paddings.init.Store(int32(padding))
+		ipcDev.paddings.init = padding
 
 	case "s2":
 		padding, err := strconv.Atoi(value)
@@ -377,8 +377,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		if padding < 0 {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s2 must be non-negative")
 		}
-		device.log.Verbosef("UAPI: Updating s2 padding")
-		device.paddings.response.Store(int32(padding))
+		ipcDev.paddings.response = padding
 
 	case "s3":
 		padding, err := strconv.Atoi(value)
@@ -388,8 +387,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		if padding < 0 {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s3 must be non-negative")
 		}
-		device.log.Verbosef("UAPI: Updating s3 padding")
-		device.paddings.cookie.Store(int32(padding))
+		ipcDev.paddings.cookie = padding
 
 	case "s4":
 		padding, err := strconv.Atoi(value)
@@ -399,36 +397,35 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		if padding < 0 {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s4 must be non-negative")
 		}
-		device.log.Verbosef("UAPI: Updating s4 padding")
-		device.paddings.transport.Store(int32(padding))
+		ipcDev.paddings.transport = padding
 
 	case "h1":
 		header, err := newMagicHeader(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H1: %w", err)
 		}
-		device.headers.init = header
+		ipcDev.headers.init = header
 
 	case "h2":
 		header, err := newMagicHeader(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H2: %w", err)
 		}
-		device.headers.response = header
+		ipcDev.headers.response = header
 
 	case "h3":
 		header, err := newMagicHeader(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H3: %w", err)
 		}
-		device.headers.cookie = header
+		ipcDev.headers.cookie = header
 
 	case "h4":
 		header, err := newMagicHeader(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H4: %w", err)
 		}
-		device.headers.transport = header
+		ipcDev.headers.transport = header
 
 	case "i1":
 		chain, err := newObfChain(value)
@@ -471,11 +468,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set header_protection_key: %w", err)
 		}
-		device.log.Verbosef("UAPI: Updating header protection key")
-
-		device.headerProtection.Lock()
-		defer device.headerProtection.Unlock()
-		device.headerProtection.key = key
+		ipcDev.headerProtectionKey = key
 
 	case "random_trailing_size_max":
 		randomTrailingSizeMax, err := strconv.Atoi(value)
@@ -755,24 +748,35 @@ type ipcSetDevice struct {
 		cookie    *magicHeader
 		transport *magicHeader
 	}
+	paddings struct {
+		init      int
+		response  int
+		cookie    int
+		transport int
+	}
+	headerProtectionKey HeaderCipherKey
+}
+
+func (d *ipcSetDevice) fromDevice(device *Device) {
+	device.headerProtection.Lock()
+	defer device.headerProtection.Unlock()
+
+	d.headers.init = device.headers.init
+	d.headers.response = device.headers.response
+	d.headers.cookie = device.headers.cookie
+	d.headers.transport = device.headers.transport
+
+	d.paddings.init = int(device.paddings.init.Load())
+	d.paddings.response = int(device.paddings.response.Load())
+	d.paddings.cookie = int(device.paddings.cookie.Load())
+	d.paddings.transport = int(device.paddings.transport.Load())
+
+	d.headerProtectionKey = device.headerProtection.key
 }
 
 func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
-	if d.headers.init == nil {
-		d.headers.init = device.headers.init
-	}
-
-	if d.headers.response == nil {
-		d.headers.response = device.headers.response
-	}
-
-	if d.headers.cookie == nil {
-		d.headers.cookie = device.headers.cookie
-	}
-
-	if d.headers.transport == nil {
-		d.headers.transport = device.headers.transport
-	}
+	device.headerProtection.Lock()
+	defer device.headerProtection.Unlock()
 
 	headers := []*magicHeader{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
 	for i := 0; i < len(headers); i++ {
@@ -786,10 +790,41 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 		}
 	}
 
+	device.log.Verbosef("UAPI: Updating h1 padding")
 	device.headers.init = d.headers.init
+
+	device.log.Verbosef("UAPI: Updating h2 padding")
 	device.headers.response = d.headers.response
+
+	device.log.Verbosef("UAPI: Updating h3 padding")
 	device.headers.cookie = d.headers.cookie
+
+	device.log.Verbosef("UAPI: Updating h4 padding")
 	device.headers.transport = d.headers.transport
+
+	if !d.headerProtectionKey.IsZero() {
+		paddings := []int{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
+		for i, padding := range paddings {
+			if padding < 8 {
+				return fmt.Errorf("S%d must be more then 8 to use headerProtection", i)
+			}
+		}
+	}
+
+	device.log.Verbosef("UAPI: Updating s1 padding")
+	device.paddings.init.Store(int32(d.paddings.init))
+
+	device.log.Verbosef("UAPI: Updating s2 padding")
+	device.paddings.response.Store(int32(d.paddings.response))
+
+	device.log.Verbosef("UAPI: Updating s3 padding")
+	device.paddings.cookie.Store(int32(d.paddings.cookie))
+
+	device.log.Verbosef("UAPI: Updating s4 padding")
+	device.paddings.transport.Store(int32(d.paddings.transport))
+
+	device.log.Verbosef("UAPI: Updating header protection key")
+	device.headerProtection.key = d.headerProtectionKey
 
 	return nil
 }
