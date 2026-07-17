@@ -53,6 +53,7 @@ type QueueOutboundElement struct {
 	nonce   uint64                // nonce for encryption
 	keypair *Keypair              // keypair for encryption
 	peer    *Peer                 // related peer
+	padding int
 }
 
 type QueueOutboundElementsContainer struct {
@@ -146,7 +147,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		sendBuffer = append(sendBuffer, buf)
 	}
 
-	padding := peer.device.paddings.init
+	padding := peer.device.paddings.init.Load()
 	buf := make([]byte, padding+MessageInitiationSize)
 
 	crypt := buf[:padding]
@@ -190,7 +191,7 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	padding := peer.device.paddings.response
+	padding := peer.device.paddings.response.Load()
 	buf := make([]byte, padding+MessageResponseSize)
 
 	crypt := buf[:padding]
@@ -242,7 +243,7 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		return err
 	}
 
-	padding := device.paddings.cookie
+	padding := device.paddings.cookie.Load()
 	buf := make([]byte, padding+MessageCookieReplySize)
 
 	crypt := buf[:padding]
@@ -291,7 +292,6 @@ func (device *Device) RoutineReadFromTUN() {
 		elemsByPeer = make(map[*Peer]*QueueOutboundElementsContainer, batchSize)
 		count       = 0
 		sizes       = make([]int, batchSize)
-		offset      = MessageTransportHeaderSize + device.paddings.transport
 	)
 
 	for i := range elems {
@@ -309,6 +309,9 @@ func (device *Device) RoutineReadFromTUN() {
 	}()
 
 	for {
+		padding := int(device.paddings.transport.Load())
+		offset := MessageTransportHeaderSize + padding
+
 		// read packets
 		count, readErr = device.tun.device.Read(bufs, sizes, offset)
 		for i := 0; i < count; i++ {
@@ -318,6 +321,7 @@ func (device *Device) RoutineReadFromTUN() {
 
 			elem := elems[i]
 			elem.packet = bufs[i][offset : offset+sizes[i]]
+			elem.padding = padding
 
 			// lookup peer
 			var peer *Peer
@@ -515,14 +519,12 @@ func (device *Device) RoutineEncryption(id int) {
 
 	for elemsContainer := range device.queue.encryption.c {
 		for _, elem := range elemsContainer.elems {
-			padding := device.paddings.transport
-
 			// fill crypto padding
-			crypt := elem.buffer[:padding]
+			crypt := elem.buffer[:elem.padding]
 			rand.Read(crypt)
 
 			// populate header fields
-			header := elem.buffer[padding : padding+MessageTransportHeaderSize]
+			header := elem.buffer[elem.padding : elem.padding+MessageTransportHeaderSize]
 
 			fieldType := header[0:4]
 			fieldReceiver := header[4:8]
@@ -552,7 +554,7 @@ func (device *Device) RoutineEncryption(id int) {
 
 			binary.LittleEndian.PutUint64(nonce[4:], elem.nonce)
 			elem.packet = elem.keypair.send.Seal(
-				elem.buffer[:padding+MessageTransportHeaderSize],
+				elem.buffer[:elem.padding+MessageTransportHeaderSize],
 				nonce[:],
 				elem.packet,
 				nil,

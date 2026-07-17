@@ -115,20 +115,20 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("jmax=%d", device.junk.max)
 		}
 
-		if device.paddings.init != 0 {
-			sendf("s1=%d", device.paddings.init)
+		if padding := device.paddings.init.Load(); padding != 0 {
+			sendf("s1=%d", padding)
 		}
 
-		if device.paddings.response != 0 {
-			sendf("s2=%d", device.paddings.response)
+		if padding := device.paddings.response.Load(); padding != 0 {
+			sendf("s2=%d", padding)
 		}
 
-		if device.paddings.cookie != 0 {
-			sendf("s3=%d", device.paddings.cookie)
+		if padding := device.paddings.cookie.Load(); padding != 0 {
+			sendf("s3=%d", padding)
 		}
 
-		if device.paddings.transport != 0 {
-			sendf("s4=%d", device.paddings.transport)
+		if padding := device.paddings.transport.Load(); padding != 0 {
+			sendf("s4=%d", padding)
 		}
 
 		if device.headers.init != nil {
@@ -367,7 +367,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s1 must be non-negative")
 		}
 		device.log.Verbosef("UAPI: Updating s1 padding")
-		device.paddings.init = padding
+		device.paddings.init.Store(int32(padding))
 
 	case "s2":
 		padding, err := strconv.Atoi(value)
@@ -378,7 +378,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s2 must be non-negative")
 		}
 		device.log.Verbosef("UAPI: Updating s2 padding")
-		device.paddings.response = padding
+		device.paddings.response.Store(int32(padding))
 
 	case "s3":
 		padding, err := strconv.Atoi(value)
@@ -389,7 +389,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s3 must be non-negative")
 		}
 		device.log.Verbosef("UAPI: Updating s3 padding")
-		device.paddings.cookie = padding
+		device.paddings.cookie.Store(int32(padding))
 
 	case "s4":
 		padding, err := strconv.Atoi(value)
@@ -400,7 +400,7 @@ func (device *Device) handleDeviceLine(key, value string) error {
 			return ipcErrorf(ipc.IpcErrorInvalid, "s4 must be non-negative")
 		}
 		device.log.Verbosef("UAPI: Updating s4 padding")
-		device.paddings.transport = padding
+		device.paddings.transport.Store(int32(padding))
 
 	case "h1":
 		header, err := newMagicHeader(value)
