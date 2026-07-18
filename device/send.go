@@ -137,15 +137,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		}
 	}
 
-	jc := peer.device.junk.count
-	jmin := peer.device.junk.min
-	jmax := peer.device.junk.max
-
-	for range jc {
-		buf := make([]byte, randInt(jmin, jmax))
-		rand.Read(buf)
-		sendBuffer = append(sendBuffer, buf)
-	}
+	sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
 
 	padding := peer.device.paddings.init.Load()
 	buf := make([]byte, padding+MessageInitiationSize)

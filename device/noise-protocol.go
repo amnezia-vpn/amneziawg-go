@@ -6,6 +6,7 @@
 package device
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"sync"
@@ -625,6 +626,21 @@ func (peer *Peer) ReceivedWithKeypair(receivedKeypair *Keypair) bool {
 	keypairs.current = keypairs.next.Load()
 	keypairs.next.Store(nil)
 	return true
+}
+
+func (device *Device) JunkPackets() [][]byte {
+	device.junk.RLock()
+	defer device.junk.RUnlock()
+
+	var bufs [][]byte
+
+	for range device.junk.count {
+		buf := make([]byte, randUint(device.junk.min, device.junk.max))
+		rand.Read(buf)
+		bufs = append(bufs, buf)
+	}
+
+	return bufs
 }
 
 func (device *Device) HeaderCipher(salt []byte) (HeaderCipher, error) {

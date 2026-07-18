@@ -92,6 +92,9 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		device.contentPadding.Lock()
 		defer device.contentPadding.Unlock()
 
+		device.junk.RLock()
+		defer device.junk.RUnlock()
+
 		// serialize device related values
 
 		if !device.staticIdentity.privateKey.IsZero() {
@@ -330,37 +333,40 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.RemoveAllPeers()
 
 	case "jc":
-		jc, err := strconv.Atoi(value)
+		jc, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jc: %w", err)
 		}
-		if jc <= 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "jc must be a positive value")
-		}
+
+		device.junk.Lock()
+		defer device.junk.Unlock()
+
 		device.log.Verbosef("UAPI: Updating junk count")
-		device.junk.count = jc
+		device.junk.count = uint32(jc)
 
 	case "jmin":
-		jmin, err := strconv.Atoi(value)
+		jmin, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmin: %w", err)
 		}
-		if jmin <= 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "jmin must be a positive value")
-		}
+
+		device.junk.Lock()
+		defer device.junk.Unlock()
+
 		device.log.Verbosef("UAPI: Updating junk min")
-		device.junk.min = jmin
+		device.junk.min = uint32(jmin)
 
 	case "jmax":
-		jmax, err := strconv.Atoi(value)
+		jmax, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmax: %w", err)
 		}
-		if jmax <= 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "jmax must be a positive value")
-		}
+
+		device.junk.Lock()
+		defer device.junk.Unlock()
+
 		device.log.Verbosef("UAPI: Updating junk max")
-		device.junk.max = jmax
+		device.junk.max = uint32(jmax)
 
 	case "s1":
 		padding, err := strconv.ParseUint(value, 10, 16)

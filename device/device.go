@@ -91,9 +91,10 @@ type Device struct {
 	log      *Logger
 
 	junk struct {
-		min   int
-		max   int
-		count int
+		sync.RWMutex
+		min   uint32
+		max   uint32
+		count uint32
 	}
 
 	headers struct {
