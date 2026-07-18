@@ -72,6 +72,9 @@ Header protection is the mechanism of protecting low-entropy values of packets' 
 
 - `ContentPaddingMultiple: int,range - client-side` - the range to be used as a custom padding
 
+> [!TIP]
+> It's important to specify content padding on both sides. However, this is not strictly required and could be omitted.
+
 ### Timings [AWG 3+]
 
 This param could be used to customize default Wireguard's timings
