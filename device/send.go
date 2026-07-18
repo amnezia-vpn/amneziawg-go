@@ -53,7 +53,7 @@ type QueueOutboundElement struct {
 	nonce   uint64                // nonce for encryption
 	keypair *Keypair              // keypair for encryption
 	peer    *Peer                 // related peer
-	padding int
+	padding uint32
 }
 
 type QueueOutboundElementsContainer struct {
@@ -65,6 +65,7 @@ func (device *Device) NewOutboundElement() *QueueOutboundElement {
 	elem := device.GetOutboundElement()
 	elem.buffer = device.GetMessageBuffer()
 	elem.nonce = 0
+	elem.padding = device.paddings.transport.Load()
 	// keypair and peer were cleared (if necessary) by clearPointers.
 	return elem
 }
@@ -301,8 +302,8 @@ func (device *Device) RoutineReadFromTUN() {
 	}()
 
 	for {
-		padding := int(device.paddings.transport.Load())
-		offset := MessageTransportHeaderSize + padding
+		padding := device.paddings.transport.Load()
+		offset := MessageTransportHeaderSize + int(padding)
 
 		// read packets
 		count, readErr = device.tun.device.Read(bufs, sizes, offset)
