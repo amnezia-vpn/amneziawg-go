@@ -116,7 +116,11 @@ type Device struct {
 		sync.RWMutex
 		key HeaderCipherKey
 	}
-	randomTrailingSizeMax int
+
+	contentPadding struct {
+		sync.RWMutex
+		multiple UintRange
+	}
 
 	timings struct {
 		sync.RWMutex

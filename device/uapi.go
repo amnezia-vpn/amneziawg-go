@@ -89,6 +89,9 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		device.timings.RLock()
 		defer device.timings.RUnlock()
 
+		device.contentPadding.Lock()
+		defer device.contentPadding.Unlock()
+
 		// serialize device related values
 
 		if !device.staticIdentity.privateKey.IsZero() {
@@ -157,8 +160,8 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			keyf("header_protection_key", (*[32]byte)(&device.headerProtection.key))
 		}
 
-		if device.randomTrailingSizeMax != 0 {
-			sendf("random_trailing_size_max=%d", device.randomTrailingSizeMax)
+		if !device.contentPadding.multiple.IsZero() {
+			sendf("content_padding_multiple=%s", device.contentPadding.multiple.ToString())
 		}
 
 		if timing := device.timings.rekeyAfterTimeSec; !timing.IsZero() {
@@ -458,17 +461,17 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		}
 		ipcDev.headerProtectionKey = key
 
-	case "random_trailing_size_max":
-		randomTrailingSizeMax, err := strconv.Atoi(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse random_trailing_size_max: %w", err)
-		}
-		if randomTrailingSizeMax < 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "random_trailing_size_max must be non-negative")
+	case "content_padding_multiple":
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse content_padding_multiple: %w", err)
 		}
 
 		device.log.Verbosef("UAPI: Updating random_trailing_size_max")
-		device.randomTrailingSizeMax = randomTrailingSizeMax
+
+		device.contentPadding.Lock()
+		defer device.contentPadding.Unlock()
+		device.contentPadding.multiple = rang
 
 	case "rekey_after_time":
 		var rang UintRange

@@ -517,6 +517,17 @@ func calculatePaddingSize(packetSize, mtu, multiple int) int {
 	return paddedSize - lastUnit
 }
 
+func (device *Device) randomPaddingMultiple() uint32 {
+	device.contentPadding.RLock()
+	defer device.contentPadding.RUnlock()
+
+	if device.contentPadding.multiple.IsZero() {
+		return 0
+	}
+
+	return device.contentPadding.multiple.PickOne()
+}
+
 /* Encrypts the elements in the queue
  * and marks them for sequential consumption (by releasing the mutex)
  *
@@ -547,9 +558,9 @@ func (device *Device) RoutineEncryption(id int) {
 
 			mtu := int(device.tun.mtu.Load())
 			var paddingSize int
-			if hi := device.randomTrailingSizeMax; hi != 0 {
-				// pad content to multiple of random up to hi
-				paddingSize = calculatePaddingSize(len(elem.packet), mtu, randInt(1, hi))
+			if padding := device.randomPaddingMultiple(); padding != 0 {
+				// pad content to multiple of the one picked from range specified
+				paddingSize = calculatePaddingSize(len(elem.packet), mtu, int(padding))
 			} else {
 				// pad content to multiple of 16
 				paddingSize = calculatePaddingSize(len(elem.packet), mtu, PaddingMultiple)
