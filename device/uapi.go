@@ -360,44 +360,32 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.max = jmax
 
 	case "s1":
-		padding, err := strconv.Atoi(value)
+		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s1: %w", err)
 		}
-		if padding < 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "s1 must be non-negative")
-		}
-		ipcDev.paddings.init = padding
+		ipcDev.paddings.init = uint32(padding)
 
 	case "s2":
-		padding, err := strconv.Atoi(value)
+		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s2: %w", err)
 		}
-		if padding < 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "s2 must be non-negative")
-		}
-		ipcDev.paddings.response = padding
+		ipcDev.paddings.response = uint32(padding)
 
 	case "s3":
-		padding, err := strconv.Atoi(value)
+		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s3: %w", err)
 		}
-		if padding < 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "s3 must be non-negative")
-		}
-		ipcDev.paddings.cookie = padding
+		ipcDev.paddings.cookie = uint32(padding)
 
 	case "s4":
-		padding, err := strconv.Atoi(value)
+		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s4: %w", err)
 		}
-		if padding < 0 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "s4 must be non-negative")
-		}
-		ipcDev.paddings.transport = padding
+		ipcDev.paddings.transport = uint32(padding)
 
 	case "h1":
 		header, err := newMagicHeader(value)
@@ -749,10 +737,10 @@ type ipcSetDevice struct {
 		transport *magicHeader
 	}
 	paddings struct {
-		init      int
-		response  int
-		cookie    int
-		transport int
+		init      uint32
+		response  uint32
+		cookie    uint32
+		transport uint32
 	}
 	headerProtectionKey HeaderCipherKey
 }
@@ -766,10 +754,10 @@ func (d *ipcSetDevice) fromDevice(device *Device) {
 	d.headers.cookie = device.headers.cookie
 	d.headers.transport = device.headers.transport
 
-	d.paddings.init = int(device.paddings.init.Load())
-	d.paddings.response = int(device.paddings.response.Load())
-	d.paddings.cookie = int(device.paddings.cookie.Load())
-	d.paddings.transport = int(device.paddings.transport.Load())
+	d.paddings.init = device.paddings.init.Load()
+	d.paddings.response = device.paddings.response.Load()
+	d.paddings.cookie = device.paddings.cookie.Load()
+	d.paddings.transport = device.paddings.transport.Load()
 
 	d.headerProtectionKey = device.headerProtection.key
 }
@@ -803,7 +791,7 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headers.transport = d.headers.transport
 
 	if !d.headerProtectionKey.IsZero() {
-		paddings := []int{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
+		paddings := []uint32{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
 		for i, padding := range paddings {
 			if padding < 8 {
 				return fmt.Errorf("S%d must be more then 8 to use headerProtection", i)
@@ -812,16 +800,16 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	}
 
 	device.log.Verbosef("UAPI: Updating s1 padding")
-	device.paddings.init.Store(int32(d.paddings.init))
+	device.paddings.init.Store(d.paddings.init)
 
 	device.log.Verbosef("UAPI: Updating s2 padding")
-	device.paddings.response.Store(int32(d.paddings.response))
+	device.paddings.response.Store(d.paddings.response)
 
 	device.log.Verbosef("UAPI: Updating s3 padding")
-	device.paddings.cookie.Store(int32(d.paddings.cookie))
+	device.paddings.cookie.Store(d.paddings.cookie)
 
 	device.log.Verbosef("UAPI: Updating s4 padding")
-	device.paddings.transport.Store(int32(d.paddings.transport))
+	device.paddings.transport.Store(d.paddings.transport)
 
 	device.log.Verbosef("UAPI: Updating header protection key")
 	device.headerProtection.key = d.headerProtectionKey

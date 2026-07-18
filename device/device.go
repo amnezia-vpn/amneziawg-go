@@ -104,10 +104,10 @@ type Device struct {
 	}
 
 	paddings struct {
-		init      atomic.Int32
-		response  atomic.Int32
-		cookie    atomic.Int32
-		transport atomic.Int32
+		init      atomic.Uint32
+		response  atomic.Uint32
+		cookie    atomic.Uint32
+		transport atomic.Uint32
 	}
 
 	ipackets [5]*obfChain
