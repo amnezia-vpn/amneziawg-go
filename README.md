@@ -60,23 +60,23 @@ $ make
 
 Header protection is the mechanism of protecting low-entropy values of packets' headers. The idea is to apply fast encryption to the specific fields which WireGuard does use for authentication and its own encryption. The cipher uses `S1-S4` crypto padding as nonce for each incoming packet.
 
+- `HeaderProtectionKey: key,string - client-side` - the key to be used in header protection
+
 > [!TIP]
 > Use `awg genkey` to generate header protection key
 
 > [!IMPORTANT]
 > Header protection requires `S1-S4` value to be 8 at least
 
-- `HeaderProtectionKey: key` - the key to be used in header protection
-
 ### Content padding [AWG 3+]
 
-- `ContentPaddingMultiple` - the range to be used as a custom padding
+- `ContentPaddingMultiple: int,range - client-side` - the range to be used as a custom padding
 
 ### Timings [AWG 3+]
 
 This param could be used to customize default Wireguard's timings
 
-- `RekeyAfterTime: int range` - the range to pick value for rekey from. Specified in seconds
+- `RekeyAfterTime: int,range - both-side` - the range to pick value for rekey from. Specified in seconds
 
 ### Junk packets
 
