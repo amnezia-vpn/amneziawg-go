@@ -145,7 +145,7 @@ type UintRange struct {
 
 func (r *UintRange) FromString(str string) error {
 	parts := strings.Split(str, "-")
-	if len(parts) != 2 {
+	if len(parts) < 1 || len(parts) > 2 {
 		return errors.New("wrong format")
 	}
 
@@ -154,9 +154,12 @@ func (r *UintRange) FromString(str string) error {
 		return err
 	}
 
-	hi, err := strconv.ParseInt(parts[1], 10, 32)
-	if err != nil {
-		return err
+	hi := lo
+	if len(parts) > 1 {
+		hi, err = strconv.ParseInt(parts[1], 10, 32)
+		if err != nil {
+			return err
+		}
 	}
 
 	r.lo = uint32(lo)
@@ -173,5 +176,9 @@ func (r *UintRange) PickOne() uint32 {
 }
 
 func (r *UintRange) ToString() string {
-	return fmt.Sprintf("%d-%d", r.lo, r.hi)
+	if r.lo == r.hi {
+		return fmt.Sprintf("%d", r.lo)
+	} else {
+		return fmt.Sprintf("%d-%d", r.lo, r.hi)
+	}
 }

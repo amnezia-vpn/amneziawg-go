@@ -163,8 +163,8 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			keyf("header_protection_key", (*[32]byte)(&device.headerProtection.key))
 		}
 
-		if !device.contentPadding.multiple.IsZero() {
-			sendf("content_padding_multiple=%s", device.contentPadding.multiple.ToString())
+		if !device.contentPadding.addition.IsZero() {
+			sendf("content_padding_addition=%s", device.contentPadding.addition.ToString())
 		}
 
 		if timing := device.timings.rekeyAfterTimeSec; !timing.IsZero() {
@@ -467,17 +467,17 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		}
 		ipcDev.headerProtectionKey = key
 
-	case "content_padding_multiple":
+	case "content_padding_addition":
 		var rang UintRange
 		if err := rang.FromString(value); err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse content_padding_multiple: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse content_padding_addition: %w", err)
 		}
 
 		device.log.Verbosef("UAPI: Updating random_trailing_size_max")
 
 		device.contentPadding.Lock()
 		defer device.contentPadding.Unlock()
-		device.contentPadding.multiple = rang
+		device.contentPadding.addition = rang
 
 	case "rekey_after_time":
 		var rang UintRange

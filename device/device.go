@@ -120,7 +120,7 @@ type Device struct {
 
 	contentPadding struct {
 		sync.RWMutex
-		multiple UintRange
+		addition UintRange
 	}
 
 	timings struct {

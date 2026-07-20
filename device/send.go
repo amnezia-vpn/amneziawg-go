@@ -484,41 +484,41 @@ func (peer *Peer) FlushStagedPackets() {
 	}
 }
 
-func roundUp(n, m int) int {
-	if m <= 1 {
-		return n
-	}
-	remainder := n % m
-	if remainder == 0 {
-		return n
-	}
-	return n + (m - remainder)
-}
-
-func calculatePaddingSize(packetSize, mtu, multiple int) int {
+func calculatePaddingSize(packetSize, mtu int) int {
 	lastUnit := packetSize
 	if mtu == 0 {
-		return roundUp(lastUnit, multiple) - lastUnit
+		return ((lastUnit + PaddingMultiple - 1) & ^(PaddingMultiple - 1)) - lastUnit
 	}
 	if lastUnit > mtu {
 		lastUnit %= mtu
 	}
-	paddedSize := roundUp(lastUnit, multiple)
+	paddedSize := ((lastUnit + PaddingMultiple - 1) & ^(PaddingMultiple - 1))
 	if paddedSize > mtu {
 		paddedSize = mtu
 	}
 	return paddedSize - lastUnit
 }
 
-func (device *Device) randomPaddingMultiple() uint32 {
+func (device *Device) randomPaddingAddition(packetSize, mtu int) int {
 	device.contentPadding.RLock()
 	defer device.contentPadding.RUnlock()
 
-	if device.contentPadding.multiple.IsZero() {
-		return 0
+	if device.contentPadding.addition.IsZero() {
+		return -1
 	}
 
-	return device.contentPadding.multiple.PickOne()
+	add := int(device.contentPadding.addition.PickOne())
+	if mtu != 0 {
+		if packetSize > mtu {
+			packetSize %= mtu
+		}
+
+		space := mtu - packetSize
+		if add > space {
+			add = space
+		}
+	}
+	return add
 }
 
 /* Encrypts the elements in the queue
@@ -549,14 +549,13 @@ func (device *Device) RoutineEncryption(id int) {
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 
+			packetSize := len(elem.packet)
 			mtu := int(device.tun.mtu.Load())
-			var paddingSize int
-			if padding := device.randomPaddingMultiple(); padding != 0 {
-				// pad content to multiple of the one picked from range specified
-				paddingSize = calculatePaddingSize(len(elem.packet), mtu, int(padding))
-			} else {
+
+			paddingSize := device.randomPaddingAddition(packetSize, mtu)
+			if paddingSize < 0 {
 				// pad content to multiple of 16
-				paddingSize = calculatePaddingSize(len(elem.packet), mtu, PaddingMultiple)
+				paddingSize = calculatePaddingSize(packetSize, mtu)
 			}
 
 			// append trailing zeroes
