@@ -119,9 +119,17 @@ func (r *UintRange) FromString(str string) error {
 		}
 	}
 
+	if hi < lo {
+		return errors.New("wrong range specified")
+	}
+
 	r.lo = uint32(lo)
 	r.hi = uint32(hi)
 	return nil
+}
+
+func (r *UintRange) Contains(num uint32) bool {
+	return r.lo <= num && num <= r.hi
 }
 
 func (r *UintRange) IsZero() bool {
@@ -129,7 +137,7 @@ func (r *UintRange) IsZero() bool {
 }
 
 func (r *UintRange) PickOne() uint32 {
-	return randUint(r.lo, r.hi)
+	return r.lo + fastrandn(r.hi-r.lo+1)
 }
 
 func (r *UintRange) ToString() string {

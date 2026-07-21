@@ -98,10 +98,11 @@ type Device struct {
 	}
 
 	headers struct {
-		init      *magicHeader
-		cookie    *magicHeader
-		response  *magicHeader
-		transport *magicHeader
+		sync.RWMutex
+		init      UintRange
+		cookie    UintRange
+		response  UintRange
+		transport UintRange
 	}
 
 	paddings struct {
@@ -337,10 +338,10 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
 	device.rate.limiter.Init()
 	device.indexTable.Init()
 
-	device.headers.init = &magicHeader{start: MessageInitiationType, end: MessageInitiationType}
-	device.headers.response = &magicHeader{start: MessageResponseType, end: MessageResponseType}
-	device.headers.cookie = &magicHeader{start: MessageCookieReplyType, end: MessageCookieReplyType}
-	device.headers.transport = &magicHeader{start: MessageTransportType, end: MessageTransportType}
+	device.headers.init = UintRange{lo: MessageInitiationType, hi: MessageInitiationType}
+	device.headers.response = UintRange{lo: MessageResponseType, hi: MessageResponseType}
+	device.headers.cookie = UintRange{lo: MessageCookieReplyType, hi: MessageCookieReplyType}
+	device.headers.transport = UintRange{lo: MessageTransportType, hi: MessageTransportType}
 
 	device.PopulatePools()
 

@@ -601,7 +601,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 		if size == int(padding)+MessageInitiationSize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-			if header.Validate(binary.LittleEndian.Uint32(headerBytes[:])) {
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageInitiationType, padding
 			}
 		}
@@ -613,7 +613,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 		if size == int(padding)+MessageResponseSize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-			if header.Validate(binary.LittleEndian.Uint32(headerBytes[:])) {
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageResponseType, padding
 			}
 		}
@@ -625,7 +625,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 		if size == int(padding)+MessageCookieReplySize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-			if header.Validate(binary.LittleEndian.Uint32(headerBytes[:])) {
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageCookieReplyType, padding
 			}
 		}
@@ -637,7 +637,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 		if size >= int(padding)+MessageTransportHeaderSize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-			if header.Validate(binary.LittleEndian.Uint32(headerBytes[:])) {
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageTransportType, padding
 			}
 		}

@@ -196,7 +196,7 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(handshake.remoteStatic[:])
 
-	msgType := device.headers.init.Generate()
+	msgType := device.headers.init.PickOne()
 
 	msg := MessageInitiation{
 		Type:      msgType,
@@ -372,7 +372,7 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 	}
 
 	var msg MessageResponse
-	msg.Type = device.headers.response.Generate()
+	msg.Type = device.headers.response.PickOne()
 	msg.Sender = handshake.localIndex
 	msg.Receiver = handshake.remoteIndex
 
@@ -636,7 +636,7 @@ func (device *Device) JunkPackets() [][]byte {
 	var bufs [][]byte
 
 	for range device.junk.count {
-		buf := make([]byte, randUint(device.junk.min, device.junk.max))
+		buf := make([]byte, device.junk.min+fastrandn(device.junk.max-device.junk.min))
 		rand.Read(buf)
 		bufs = append(bufs, buf)
 	}

@@ -137,20 +137,20 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("s4=%d", padding)
 		}
 
-		if device.headers.init != nil {
-			sendf("h1=%s", device.headers.init.GenSpec())
+		if !device.headers.init.IsZero() {
+			sendf("h1=%s", device.headers.init.ToString())
 		}
 
-		if device.headers.response != nil {
-			sendf("h2=%s", device.headers.response.GenSpec())
+		if !device.headers.response.IsZero() {
+			sendf("h2=%s", device.headers.response.ToString())
 		}
 
-		if device.headers.cookie != nil {
-			sendf("h3=%s", device.headers.cookie.GenSpec())
+		if !device.headers.cookie.IsZero() {
+			sendf("h3=%s", device.headers.cookie.ToString())
 		}
 
-		if device.headers.transport != nil {
-			sendf("h4=%s", device.headers.transport.GenSpec())
+		if !device.headers.transport.IsZero() {
+			sendf("h4=%s", device.headers.transport.ToString())
 		}
 
 		for i, ipacket := range device.ipackets {
@@ -397,32 +397,32 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.transport = uint32(padding)
 
 	case "h1":
-		header, err := newMagicHeader(value)
-		if err != nil {
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H1: %w", err)
 		}
-		ipcDev.headers.init = header
+		ipcDev.headers.init = rang
 
 	case "h2":
-		header, err := newMagicHeader(value)
-		if err != nil {
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H2: %w", err)
 		}
-		ipcDev.headers.response = header
+		ipcDev.headers.response = rang
 
 	case "h3":
-		header, err := newMagicHeader(value)
-		if err != nil {
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H3: %w", err)
 		}
-		ipcDev.headers.cookie = header
+		ipcDev.headers.cookie = rang
 
 	case "h4":
-		header, err := newMagicHeader(value)
-		if err != nil {
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H4: %w", err)
 		}
-		ipcDev.headers.transport = header
+		ipcDev.headers.transport = rang
 
 	case "i1":
 		chain, err := newObfChain(value)
@@ -740,10 +740,10 @@ func (device *Device) IpcHandle(socket net.Conn) {
 
 type ipcSetDevice struct {
 	headers struct {
-		init      *magicHeader
-		response  *magicHeader
-		cookie    *magicHeader
-		transport *magicHeader
+		init      UintRange
+		response  UintRange
+		cookie    UintRange
+		transport UintRange
 	}
 	paddings struct {
 		init      uint32
@@ -775,13 +775,13 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headerProtection.Lock()
 	defer device.headerProtection.Unlock()
 
-	headers := []*magicHeader{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
+	headers := []UintRange{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
 	for i := 0; i < len(headers); i++ {
 		for j := i + 1; j < len(headers); j++ {
 			left := headers[i]
 			right := headers[j]
 
-			if left.start <= right.end && right.start <= left.end {
+			if left.hi <= right.lo && right.hi <= left.lo {
 				return errors.New("headers must not overlap")
 			}
 		}
