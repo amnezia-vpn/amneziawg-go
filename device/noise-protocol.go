@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/blake2s"
+	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"
 
@@ -643,60 +644,15 @@ func (device *Device) JunkPackets() [][]byte {
 	return bufs
 }
 
-func (device *Device) HeaderCipher(salt []byte) (HeaderCipher, error) {
+func (device *Device) HeaderProtectionCipher(salt []byte) (*chacha20.Cipher, error) {
 	device.headerProtection.RLock()
 	defer device.headerProtection.RUnlock()
 
 	if device.headerProtection.key.IsZero() {
-		return &headerCipherStub{}, nil
+		return nil, nil
 	}
 
-	hash, err := blake2s.New256(device.headerProtection.key[:])
-	if err != nil {
-		return nil, err
-	}
-
-	if _, err = hash.Write(salt); err != nil {
-		return nil, err
-	}
-
-	return &headerCipherImpl{hash: [blake2s.Size]byte(hash.Sum(nil))}, nil
-}
-
-func (device *Device) HeaderProtectInitiation(packet []byte, cip HeaderCipher) {
-	fieldType := packet[:4]
-	fieldSender := packet[4:8]
-
-	cip.Apply(fieldType)
-	cip.Apply(fieldSender)
-}
-
-func (device *Device) HeaderProtectionResponse(packet []byte, cip HeaderCipher) {
-	fieldType := packet[0:4]
-	fieldSender := packet[4:8]
-	fieldReceiver := packet[8:12]
-
-	cip.Apply(fieldType)
-	cip.Apply(fieldSender)
-	cip.Apply(fieldReceiver)
-}
-
-func (device *Device) HeaderProtectionCookie(packet []byte, cip HeaderCipher) {
-	fieldType := packet[0:4]
-	fieldReceiver := packet[4:8]
-
-	cip.Apply(fieldType)
-	cip.Apply(fieldReceiver)
-}
-
-func (device *Device) HeaderProtectionTransport(packet []byte, cip HeaderCipher) {
-	fieldType := packet[0:4]
-	fieldReceiver := packet[4:8]
-	fieldNonce := packet[8:16]
-
-	cip.Apply(fieldType)
-	cip.Apply(fieldReceiver)
-	cip.Apply(fieldNonce)
+	return chacha20.NewUnauthenticatedCipher(device.headerProtection.key[:], salt)
 }
 
 func (device *Device) RekeyAfterTime() time.Duration {

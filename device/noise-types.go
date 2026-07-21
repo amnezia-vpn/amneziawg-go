@@ -12,8 +12,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"golang.org/x/crypto/blake2s"
 )
 
 const (
@@ -21,7 +19,7 @@ const (
 	NoisePrivateKeySize   = 32
 	NoisePresharedKeySize = 32
 	HeaderCipherKeySize   = 32
-	HeaderCipherSaltSize  = 8
+	HeaderCipherNonceSize = 12
 )
 
 type (
@@ -96,47 +94,6 @@ func (key HeaderCipherKey) Equals(tar HeaderCipherKey) bool {
 
 func (key *HeaderCipherKey) FromHex(src string) error {
 	return loadExactHex(key[:], src)
-}
-
-var (
-	_ (HeaderCipher) = (*headerCipherImpl)(nil)
-	_ (HeaderCipher) = (*headerCipherStub)(nil)
-)
-
-type HeaderCipher interface {
-	Apply(data []byte)
-	Crypt(data []byte) []byte
-}
-
-type headerCipherImpl struct {
-	hash      [blake2s.Size]byte
-	bytesUsed int
-}
-
-func (h *headerCipherImpl) Apply(data []byte) {
-	for i := range data {
-		data[i] = data[i] ^ h.hash[h.bytesUsed]
-		h.bytesUsed++
-	}
-}
-
-func (h *headerCipherImpl) Crypt(data []byte) []byte {
-	res := make([]byte, len(data))
-	for i := range data {
-		res[i] = data[i] ^ h.hash[i]
-	}
-	return res
-}
-
-type headerCipherStub struct {
-}
-
-func (*headerCipherStub) Apply(data []byte) {
-
-}
-
-func (*headerCipherStub) Crypt(data []byte) []byte {
-	return data
 }
 
 type UintRange struct {

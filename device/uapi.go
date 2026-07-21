@@ -802,7 +802,7 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	if !d.headerProtectionKey.IsZero() {
 		paddings := []uint32{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
 		for i, padding := range paddings {
-			if padding < 8 {
+			if padding < HeaderCipherNonceSize {
 				return fmt.Errorf("S%d must be more then 8 to use headerProtection", i)
 			}
 		}

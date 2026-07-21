@@ -154,14 +154,15 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	cip, err := peer.device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+	cip, err := peer.device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
 	if err != nil {
 		return err
 	}
-	peer.device.HeaderProtectInitiation(packet, cip)
+	if cip != nil {
+		cip.XORKeyStream(packet, packet)
+	}
 
 	sendBuffer = append(sendBuffer, buf)
-
 	err = peer.SendBuffers(sendBuffer)
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -205,11 +206,13 @@ func (peer *Peer) SendHandshakeResponse() error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	cip, err := peer.device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+	cip, err := peer.device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
 	if err != nil {
 		return err
 	}
-	peer.device.HeaderProtectionResponse(packet, cip)
+	if cip != nil {
+		cip.XORKeyStream(packet, packet)
+	}
 
 	// TODO: allocation could be avoided
 	err = peer.SendBuffers([][]byte{buf})
@@ -246,11 +249,13 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	binary.Write(writer, binary.LittleEndian, reply)
 	packet := writer.Bytes()
 
-	cip, err := device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+	cip, err := device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
 	if err != nil {
 		return err
 	}
-	device.HeaderProtectionCookie(packet, cip)
+	if cip != nil {
+		cip.XORKeyStream(packet, packet)
+	}
 
 	// TODO: allocation could be avoided
 	device.net.bind.Send([][]byte{buf}, initiatingElem.endpoint)
@@ -574,13 +579,15 @@ func (device *Device) RoutineEncryption(id int) {
 				nil,
 			)
 
-			cip, err := device.HeaderCipher(crypt[:HeaderCipherSaltSize])
+			cip, err := device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
 			if err != nil {
 				device.log.Errorf("Routing: header obfuscation failed - packet dropped")
 				elem.packet = nil
 				continue
 			}
-			device.HeaderProtectionTransport(header, cip)
+			if cip != nil {
+				cip.XORKeyStream(header, header)
+			}
 		}
 		elemsContainer.Unlock()
 	}
