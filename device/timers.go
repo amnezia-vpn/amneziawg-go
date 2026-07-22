@@ -114,7 +114,6 @@ func expiredSendKeepalive(peer *Peer, d time.Duration) {
 	if peer.timers.needAnotherKeepalive.Load() {
 		peer.timers.needAnotherKeepalive.Store(false)
 		if peer.timersActive() {
-			peer.timers.maxHandshakeAttempts.Store(peer.device.maxHandshakeAttemps())
 			peer.timers.sendKeepalive.Mod(peer.sendKeepaliveTimeout())
 		}
 	}
@@ -183,6 +182,7 @@ func (peer *Peer) timersHandshakeComplete() {
 		peer.timers.retransmitHandshake.Del()
 	}
 	peer.timers.handshakeAttempts.Store(0)
+	peer.timers.maxHandshakeAttempts.Store(peer.device.maxHandshakeAttemps())
 	peer.timers.sentLastMinuteHandshake.Store(false)
 	peer.lastHandshakeNano.Store(time.Now().UnixNano())
 }
@@ -212,6 +212,7 @@ func (peer *Peer) timersInit() {
 
 func (peer *Peer) timersStart() {
 	peer.timers.handshakeAttempts.Store(0)
+	peer.timers.maxHandshakeAttempts.Store(peer.device.maxHandshakeAttemps())
 	peer.timers.sentLastMinuteHandshake.Store(false)
 	peer.timers.needAnotherKeepalive.Store(false)
 }
