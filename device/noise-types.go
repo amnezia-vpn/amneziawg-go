@@ -106,14 +106,14 @@ func (r *UintRange) FromString(str string) error {
 		return errors.New("wrong format")
 	}
 
-	lo, err := strconv.ParseInt(parts[0], 10, 32)
+	lo, err := strconv.ParseUint(parts[0], 10, 32)
 	if err != nil {
 		return err
 	}
 
 	hi := lo
 	if len(parts) > 1 {
-		hi, err = strconv.ParseInt(parts[1], 10, 32)
+		hi, err = strconv.ParseUint(parts[1], 10, 32)
 		if err != nil {
 			return err
 		}
