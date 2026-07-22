@@ -126,7 +126,11 @@ type Device struct {
 
 	timings struct {
 		sync.RWMutex
-		rekeyAfterTimeSec UintRange
+		rekeyAfterTimeSec   UintRange
+		rekeyTimeoutSec     UintRange
+		rejectAfterTimeSec  UintRange
+		keepaliveTimeoutSec UintRange
+		maxHandshakeAttemps UintRange
 	}
 }
 
@@ -453,10 +457,12 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 		return
 	}
 
+	timeout := device.keychainExpireTime()
+
 	device.peers.RLock()
 	for _, peer := range device.peers.keyMap {
 		peer.keypairs.RLock()
-		sendKeepalive := peer.keypairs.current != nil && !peer.keypairs.current.created.Add(RejectAfterTime).Before(time.Now())
+		sendKeepalive := peer.keypairs.current != nil && !peer.keypairs.current.created.Add(timeout).Before(time.Now())
 		peer.keypairs.RUnlock()
 		if sendKeepalive {
 			peer.SendKeepalive()

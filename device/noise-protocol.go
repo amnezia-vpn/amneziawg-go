@@ -654,14 +654,3 @@ func (device *Device) HeaderProtectionCipher(salt []byte) (*chacha20.Cipher, err
 
 	return chacha20.NewUnauthenticatedCipher(device.headerProtection.key[:], salt)
 }
-
-func (device *Device) RekeyAfterTime() time.Duration {
-	device.timings.RLock()
-	defer device.timings.RUnlock()
-
-	rekeyAfterTime := RekeyAfterTime
-	if timing := device.timings.rekeyAfterTimeSec; !timing.IsZero() {
-		rekeyAfterTime = time.Second * time.Duration(timing.PickOne())
-	}
-	return rekeyAfterTime
-}

@@ -170,6 +170,18 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		if timing := device.timings.rekeyAfterTimeSec; !timing.IsZero() {
 			sendf("rekey_after_time=%s", timing.ToString())
 		}
+		if timing := device.timings.rekeyTimeoutSec; !timing.IsZero() {
+			sendf("rekey_timeout=%s", timing.ToString())
+		}
+		if timing := device.timings.rejectAfterTimeSec; !timing.IsZero() {
+			sendf("reject_after_time=%s", timing.ToString())
+		}
+		if timing := device.timings.keepaliveTimeoutSec; !timing.IsZero() {
+			sendf("keepalive_timeout=%s", timing.ToString())
+		}
+		if rang := device.timings.maxHandshakeAttemps; !rang.IsZero() {
+			sendf("max_handshake_attemps=%s", rang.ToString())
+		}
 
 		for _, peer := range device.peers.keyMap {
 			// Serialize peer state.
@@ -488,6 +500,46 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.timings.Lock()
 		defer device.timings.Unlock()
 		device.timings.rekeyAfterTimeSec = rang
+
+	case "rekey_timeout":
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse rekey_timeout: %w", err)
+		}
+
+		device.timings.Lock()
+		defer device.timings.Unlock()
+		device.timings.rekeyTimeoutSec = rang
+
+	case "reject_after_time":
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse reject_after_time: %w", err)
+		}
+
+		device.timings.Lock()
+		defer device.timings.Unlock()
+		device.timings.rejectAfterTimeSec = rang
+
+	case "keepalive_timeout":
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse keepalive_timeout: %w", err)
+		}
+
+		device.timings.Lock()
+		defer device.timings.Unlock()
+		device.timings.keepaliveTimeoutSec = rang
+
+	case "max_handshake_attempts":
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse max_handshake_attempts: %w", err)
+		}
+
+		device.timings.Lock()
+		defer device.timings.Unlock()
+		device.timings.maxHandshakeAttemps = rang
 
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
