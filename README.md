@@ -70,7 +70,7 @@ Header protection is the mechanism of protecting low-entropy values of packets' 
 
 ### Content padding [AWG 3+]
 
-- `ContentPaddingMultiple: int,range - client-side` - the range to be used as a custom padding
+- `ContentPaddingMultiple: uint32,range - client-side` - the range to be used as a custom padding
 
 > [!TIP]
 > It's important to specify content padding on both sides. However, this is not strictly required and could be omitted.
@@ -79,7 +79,13 @@ Header protection is the mechanism of protecting low-entropy values of packets' 
 
 This param could be used to customize default Wireguard's timings
 
-- `RekeyAfterTime: int,range - both-side` - the range to pick value for rekey from. Specified in seconds
+```
++ RekeyAfterTime       = "uint32,range - client-side - seconds" # time, after which client tries to handshake
++ RekeyTimeout         = "uint32,range - client-side - seconds" # timeout, after which handshake is repeated
++ RejectAfterTime      = "uint32,range - client-side - seconds" # time, after which client forces handshake, and declines all incoming data
++ KeepaliveTimeout     = "uint32,range - client-side - seconds" # time from last data sending, after which keepalive is sent
++ MaxHandshakeAttempts = "uint32,range - client-side - amount"  # maximum attempts of handshake repetition
+```
 
 ### Junk packets
 
