@@ -91,18 +91,16 @@ type Device struct {
 	log      *Logger
 
 	junk struct {
-		sync.RWMutex
-		min   uint32
-		max   uint32
-		count uint32
+		min   atomic.Uint32
+		max   atomic.Uint32
+		count atomic.Uint32
 	}
 
 	headers struct {
-		sync.RWMutex
-		init      UintRange
-		cookie    UintRange
-		response  UintRange
-		transport UintRange
+		init      AtomicUintRange
+		cookie    AtomicUintRange
+		response  AtomicUintRange
+		transport AtomicUintRange
 	}
 
 	paddings struct {
@@ -119,18 +117,14 @@ type Device struct {
 		key HeaderCipherKey
 	}
 
-	contentPadding struct {
-		sync.RWMutex
-		addition UintRange
-	}
+	contentPaddingAddition AtomicUintRange
 
 	timings struct {
-		sync.RWMutex
-		rekeyAfterTimeSec   UintRange
-		rekeyTimeoutSec     UintRange
-		rejectAfterTimeSec  UintRange
-		keepaliveTimeoutSec UintRange
-		maxHandshakeAttemps UintRange
+		rekeyAfterTimeSec   AtomicUintRange
+		rekeyTimeoutSec     AtomicUintRange
+		rejectAfterTimeSec  AtomicUintRange
+		keepaliveTimeoutSec AtomicUintRange
+		maxHandshakeAttemps AtomicUintRange
 	}
 }
 
@@ -326,6 +320,8 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 }
 
 func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
+	var rang UintRange
+
 	device := new(Device)
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
@@ -342,10 +338,14 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
 	device.rate.limiter.Init()
 	device.indexTable.Init()
 
-	device.headers.init = UintRange{lo: MessageInitiationType, hi: MessageInitiationType}
-	device.headers.response = UintRange{lo: MessageResponseType, hi: MessageResponseType}
-	device.headers.cookie = UintRange{lo: MessageCookieReplyType, hi: MessageCookieReplyType}
-	device.headers.transport = UintRange{lo: MessageTransportType, hi: MessageTransportType}
+	rang.FromUint32(MessageInitiationType, MessageInitiationType)
+	device.headers.init.Store(rang)
+	rang.FromUint32(MessageResponseType, MessageResponseType)
+	device.headers.response.Store(rang)
+	rang.FromUint32(MessageCookieReplyType, MessageCookieReplyType)
+	device.headers.cookie.Store(rang)
+	rang.FromUint32(MessageTransportType, MessageTransportType)
+	device.headers.transport.Store(rang)
 
 	device.PopulatePools()
 

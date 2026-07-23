@@ -228,7 +228,7 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	device.log.Verbosef("Sending cookie response for denied handshake message for %v", initiatingElem.endpoint.DstToString())
 
 	sender := binary.LittleEndian.Uint32(initiatingElem.packet[4:8])
-	msgType := device.headers.cookie.PickOne()
+	msgType := device.headers.cookie.Load().PickOne()
 
 	reply, err := device.cookieChecker.CreateReply(
 		initiatingElem.packet,
@@ -507,14 +507,13 @@ func calculatePaddingSize(packetSize, mtu int) int {
 }
 
 func (device *Device) randomPaddingAddition(packetSize, mtu int) int {
-	device.contentPadding.RLock()
-	defer device.contentPadding.RUnlock()
+	addition := device.contentPaddingAddition.Load()
 
-	if device.contentPadding.addition.IsZero() {
+	if addition.IsZero() {
 		return -1
 	}
 
-	add := int(device.contentPadding.addition.PickOne())
+	add := int(addition.PickOne())
 	if mtu != 0 {
 		if packetSize > mtu {
 			packetSize %= mtu
@@ -552,7 +551,7 @@ func (device *Device) RoutineEncryption(id int) {
 			fieldReceiver := header[4:8]
 			fieldNonce := header[8:16]
 
-			binary.LittleEndian.PutUint32(fieldType, device.headers.transport.PickOne())
+			binary.LittleEndian.PutUint32(fieldType, device.headers.transport.Load().PickOne())
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 

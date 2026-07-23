@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -96,8 +97,10 @@ func (key *HeaderCipherKey) FromHex(src string) error {
 	return loadExactHex(key[:], src)
 }
 
-type UintRange struct {
-	hi, lo uint32
+type UintRange uint64
+
+func (r *UintRange) FromUint32(lo, hi uint32) {
+	*r = UintRange(uint64(hi)<<32 | uint64(lo))
 }
 
 func (r *UintRange) FromString(str string) error {
@@ -123,27 +126,61 @@ func (r *UintRange) FromString(str string) error {
 		return errors.New("wrong range specified")
 	}
 
-	r.lo = uint32(lo)
-	r.hi = uint32(hi)
+	r.FromUint32(uint32(lo), uint32(hi))
 	return nil
 }
 
-func (r *UintRange) Contains(num uint32) bool {
-	return r.lo <= num && num <= r.hi
+func (r UintRange) Contains(num uint32) bool {
+	lo, hi := uint32(r), uint32(r>>32)
+	return lo <= num && num <= hi
 }
 
-func (r *UintRange) IsZero() bool {
-	return r.hi == 0 && r.lo == 0
+func (r UintRange) IsZero() bool {
+	return r == 0
 }
 
-func (r *UintRange) PickOne() uint32 {
-	return r.lo + fastrandn(r.hi-r.lo+1)
+func (r UintRange) PickOne() uint32 {
+	lo, hi := uint32(r), uint32(r>>32)
+	return lo + fastrandn(hi-lo+1)
 }
 
-func (r *UintRange) ToString() string {
-	if r.lo == r.hi {
-		return fmt.Sprintf("%d", r.lo)
+func (r UintRange) ToString() string {
+	lo, hi := uint32(r), uint32(r>>32)
+
+	if lo == hi {
+		return fmt.Sprintf("%d", lo)
 	} else {
-		return fmt.Sprintf("%d-%d", r.lo, r.hi)
+		return fmt.Sprintf("%d-%d", lo, hi)
 	}
+}
+
+func (r UintRange) Overlap(right UintRange) bool {
+	l_lo, l_hi := uint32(r), uint32(r>>32)
+	r_lo, r_hi := uint32(right), uint32(right>>32)
+
+	return l_lo <= r_hi && r_lo <= l_hi
+}
+
+func (r UintRange) Lo() uint32 {
+	return uint32(r)
+}
+
+func (r UintRange) Hi() uint32 {
+	return uint32(r >> 32)
+}
+
+type AtomicUintRange struct {
+	v atomic.Uint64
+}
+
+func (a *AtomicUintRange) Load() UintRange {
+	return UintRange(a.v.Load())
+}
+
+func (a *AtomicUintRange) Store(r UintRange) {
+	a.v.Store(uint64(r))
+}
+
+func (a *AtomicUintRange) Swap(r UintRange) UintRange {
+	return UintRange(a.v.Swap(uint64(r)))
 }

@@ -228,11 +228,9 @@ func (peer *Peer) timersStop() {
 func (peer *Peer) retransmitHandshakeTimeout() time.Duration {
 	timeout := RekeyTimeout
 
-	peer.device.timings.RLock()
-	if t := peer.device.timings.rekeyTimeoutSec; !t.IsZero() {
+	if t := peer.device.timings.rekeyTimeoutSec.Load(); !t.IsZero() {
 		timeout = time.Duration(t.PickOne()) * time.Second
 	}
-	peer.device.timings.RUnlock()
 
 	return timeout
 }
@@ -240,11 +238,9 @@ func (peer *Peer) retransmitHandshakeTimeout() time.Duration {
 func (peer *Peer) sendKeepaliveTimeout() time.Duration {
 	timeout := KeepaliveTimeout
 
-	peer.device.timings.RLock()
-	if t := peer.device.timings.keepaliveTimeoutSec; !t.IsZero() {
+	if t := peer.device.timings.keepaliveTimeoutSec.Load(); !t.IsZero() {
 		timeout = time.Duration(t.PickOne()) * time.Second
 	}
-	peer.device.timings.RUnlock()
 
 	return timeout
 }
@@ -253,14 +249,12 @@ func (peer *Peer) newHandshakeTimeout() time.Duration {
 	keepaliveTimeout := KeepaliveTimeout
 	rekeyTimeout := RekeyTimeout
 
-	peer.device.timings.RLock()
-	if t := peer.device.timings.keepaliveTimeoutSec; !t.IsZero() {
-		keepaliveTimeout = time.Duration(t.hi) * time.Second
+	if t := peer.device.timings.keepaliveTimeoutSec.Load(); !t.IsZero() {
+		keepaliveTimeout = time.Duration(t.Hi()) * time.Second
 	}
-	if t := peer.device.timings.rekeyTimeoutSec; !t.IsZero() {
+	if t := peer.device.timings.rekeyTimeoutSec.Load(); !t.IsZero() {
 		rekeyTimeout = time.Duration(t.PickOne()) * time.Second
 	}
-	peer.device.timings.RUnlock()
 
 	return keepaliveTimeout + rekeyTimeout
 }
@@ -268,11 +262,9 @@ func (peer *Peer) newHandshakeTimeout() time.Duration {
 func (device *Device) keyRefreshTimeoutSending() time.Duration {
 	rekeyAfterTime := RekeyAfterTime
 
-	device.timings.RLock()
-	if t := device.timings.rekeyAfterTimeSec; !t.IsZero() {
+	if t := device.timings.rekeyAfterTimeSec.Load(); !t.IsZero() {
 		rekeyAfterTime = time.Duration(t.PickOne()) * time.Second
 	}
-	device.timings.RUnlock()
 
 	return rekeyAfterTime
 }
@@ -282,17 +274,15 @@ func (device *Device) keyRefreshTimeoutReceiving() time.Duration {
 	keepaliveTimeout := KeepaliveTimeout
 	rekeyTimeout := RekeyTimeout
 
-	device.timings.RLock()
-	if t := device.timings.rejectAfterTimeSec; !t.IsZero() {
+	if t := device.timings.rejectAfterTimeSec.Load(); !t.IsZero() {
 		rejectAfterTime = time.Duration(t.PickOne()) * time.Second
 	}
-	if t := device.timings.keepaliveTimeoutSec; !t.IsZero() {
-		keepaliveTimeout = time.Duration(t.lo) * time.Second
+	if t := device.timings.keepaliveTimeoutSec.Load(); !t.IsZero() {
+		keepaliveTimeout = time.Duration(t.Lo()) * time.Second
 	}
-	if t := device.timings.rekeyTimeoutSec; !t.IsZero() {
-		rekeyTimeout = time.Duration(t.lo) * time.Second
+	if t := device.timings.rekeyTimeoutSec.Load(); !t.IsZero() {
+		rekeyTimeout = time.Duration(t.Lo()) * time.Second
 	}
-	device.timings.RUnlock()
 
 	return max(0, rejectAfterTime-keepaliveTimeout-rekeyTimeout)
 }
@@ -300,11 +290,9 @@ func (device *Device) keyRefreshTimeoutReceiving() time.Duration {
 func (device *Device) keychainExpireTime() time.Duration {
 	rejectAfterTime := RejectAfterTime
 
-	device.timings.RLock()
-	if t := device.timings.rejectAfterTimeSec; !t.IsZero() {
-		rejectAfterTime = time.Duration(t.hi) * time.Second
+	if t := device.timings.rejectAfterTimeSec.Load(); !t.IsZero() {
+		rejectAfterTime = time.Duration(t.Hi()) * time.Second
 	}
-	device.timings.RUnlock()
 
 	return rejectAfterTime
 }
@@ -312,11 +300,9 @@ func (device *Device) keychainExpireTime() time.Duration {
 func (device *Device) rekeyMinTimeout() time.Duration {
 	rekeyTimeout := RekeyTimeout
 
-	device.timings.RLock()
-	if t := device.timings.rekeyTimeoutSec; !t.IsZero() {
-		rekeyTimeout = time.Duration(t.lo) * time.Second
+	if t := device.timings.rekeyTimeoutSec.Load(); !t.IsZero() {
+		rekeyTimeout = time.Duration(t.Lo()) * time.Second
 	}
-	device.timings.RUnlock()
 
 	return rekeyTimeout
 }
@@ -324,11 +310,9 @@ func (device *Device) rekeyMinTimeout() time.Duration {
 func (device *Device) maxHandshakeAttemps() uint32 {
 	res := uint32(MaxTimerHandshakes)
 
-	device.timings.RLock()
-	if t := device.timings.maxHandshakeAttemps; !t.IsZero() {
+	if t := device.timings.maxHandshakeAttemps.Load(); !t.IsZero() {
 		res = t.PickOne()
 	}
-	device.timings.RUnlock()
 
 	return res
 }

@@ -598,7 +598,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 	if expectedType == MessageUnknownType || expectedType == MessageInitiationType {
 		padding := device.paddings.init.Load()
-		header := device.headers.init
+		header := device.headers.init.Load()
 
 		if size == int(padding)+MessageInitiationSize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
@@ -610,7 +610,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 	if expectedType == MessageUnknownType || expectedType == MessageResponseType {
 		padding := device.paddings.response.Load()
-		header := device.headers.response
+		header := device.headers.response.Load()
 
 		if size == int(padding)+MessageResponseSize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
@@ -622,7 +622,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 	if expectedType == MessageUnknownType || expectedType == MessageCookieReplyType {
 		padding := device.paddings.cookie.Load()
-		header := device.headers.cookie
+		header := device.headers.cookie.Load()
 
 		if size == int(padding)+MessageCookieReplySize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
@@ -634,7 +634,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType 
 
 	if expectedType == MessageUnknownType || expectedType == MessageTransportType {
 		padding := device.paddings.transport.Load()
-		header := device.headers.transport
+		header := device.headers.transport.Load()
 
 		if size >= int(padding)+MessageTransportHeaderSize {
 			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
