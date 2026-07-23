@@ -103,6 +103,7 @@ func (peer *Peer) SendKeepalive() {
 func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	if !isRetry {
 		peer.timers.handshakeAttempts.Store(0)
+		peer.timers.maxHandshakeAttempts.Store(peer.device.maxHandshakeAttemps())
 	}
 
 	timeout := peer.device.rekeyMinTimeout()
