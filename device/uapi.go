@@ -171,7 +171,7 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("keepalive_timeout=%s", timing.ToString())
 		}
 		if rang := device.timings.maxHandshakeAttemps.Load(); !rang.IsZero() {
-			sendf("max_handshake_attemps=%s", rang.ToString())
+			sendf("max_handshake_attempts=%s", rang.ToString())
 		}
 
 		for _, peer := range device.peers.keyMap {
