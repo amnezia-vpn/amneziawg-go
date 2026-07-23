@@ -53,6 +53,15 @@ $ make
 
 ## Configuration
 
+### Data types and definitions
+
+`client-side` means the param is not required to be the same on both server and client, while  
+`server-side` means this is mandatory the values are the same on server and on client  
+
+`range,x`, where x is the underlying type of left and right
+* Format: "a-b", or "a", or "(off)"
+* Example: PersistentKeepalive = 22-30
+
 > [!NOTE]
 > If there is no value specified (for any param), AWG treats it as 0
 
@@ -60,7 +69,10 @@ $ make
 
 Header protection is the mechanism of protecting low-entropy values of packets' headers. The idea is to apply fast encryption to the specific fields which WireGuard does use for authentication and its own encryption. The cipher uses `S1-S4` crypto padding as nonce for each incoming packet.
 
-- `HeaderProtectionKey: key,string - client-side` - the key to be used in header protection
+```
+[Device]
++ HeaderProtectionKey: key,string - server-side # the key to be used in header protection
+```
 
 > [!TIP]
 > Use `awg genkey` to generate header protection key
@@ -70,7 +82,10 @@ Header protection is the mechanism of protecting low-entropy values of packets' 
 
 ### Content padding [AWG 3+]
 
-- `ContentPaddingMultiple: uint32,range - client-side` - the range to be used as a custom padding
+```
+[Device]
++ ContentPaddingAddition: uint32,range - client-side # the range to be used as a custom padding
+```
 
 > [!TIP]
 > It's important to specify content padding on both sides. However, this is not strictly required and could be omitted.
@@ -80,11 +95,15 @@ Header protection is the mechanism of protecting low-entropy values of packets' 
 This param could be used to customize default Wireguard's timings
 
 ```
+[Device]
 + RekeyAfterTime       = "uint32,range - client-side - seconds" # time, after which client tries to handshake
 + RekeyTimeout         = "uint32,range - client-side - seconds" # timeout, after which handshake is repeated
 + RejectAfterTime      = "uint32,range - client-side - seconds" # time, after which client forces handshake, and declines all incoming data
 + KeepaliveTimeout     = "uint32,range - client-side - seconds" # time from last data sending, after which keepalive is sent
 + MaxHandshakeAttempts = "uint32,range - client-side - amount"  # maximum attempts of handshake repetition
+
+[Peer]
+M PersistentKeepalive  = "uint32,range - client-side - seconds" # interval of persistent keepalive
 ```
 
 ### Junk packets
