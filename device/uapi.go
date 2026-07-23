@@ -204,7 +204,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("last_handshake_time_nsec=%d", nano)
 			sendf("tx_bytes=%d", peer.txBytes.Load())
 			sendf("rx_bytes=%d", peer.rxBytes.Load())
-			sendf("persistent_keepalive_interval=%d", peer.persistentKeepaliveInterval.Load())
+
+			if keepalive := peer.persistentKeepaliveInterval.Load(); !keepalive.IsZero() {
+				sendf("persistent_keepalive_interval=%s", keepalive.ToString())
+			}
 
 			device.allowedips.EntriesForPeer(peer, func(prefix netip.Prefix) bool {
 				sendf("allowed_ip=%s", prefix.String())
@@ -661,19 +664,15 @@ func (device *Device) handlePeerLine(
 	case "persistent_keepalive_interval":
 		device.log.Verbosef("%v - UAPI: Updating persistent keepalive interval", peer.Peer)
 
-		secs, err := strconv.ParseUint(value, 10, 16)
-		if err != nil {
-			return ipcErrorf(
-				ipc.IpcErrorInvalid,
-				"failed to set persistent keepalive interval: %w",
-				err,
-			)
+		var rang UintRange
+		if err := rang.FromString(value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set persistent keepalive interval: %w", err)
 		}
 
-		old := peer.persistentKeepaliveInterval.Swap(uint32(secs))
+		old := peer.persistentKeepaliveInterval.Swap(&rang)
 
 		// Send immediate keepalive if we're turning it on and before it wasn't on.
-		peer.pkaOn = old == 0 && secs != 0
+		peer.pkaOn = old.IsZero() && !rang.IsZero()
 
 	case "replace_allowed_ips":
 		device.log.Verbosef("%v - UAPI: Removing all allowedips", peer.Peer)
