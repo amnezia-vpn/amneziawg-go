@@ -260,6 +260,14 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		cip.XORKeyStream(packet, packet)
 	}
 
+	if device.salamanderEnabled() {
+		obfuscated, err := device.salamanderObfuscate(packet)
+		if err != nil {
+			return err
+		}
+		packet = obfuscated
+	}
+
 	// TODO: allocation could be avoided
 	device.net.bind.Send([][]byte{buf}, initiatingElem.endpoint)
 	return nil

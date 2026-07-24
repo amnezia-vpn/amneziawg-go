@@ -134,12 +134,16 @@ func (device *Device) RoutineReceiveIncoming(
 
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
-			if size < MinMessageSize {
+			packet := bufsArrs[i][:size]
+			var ok bool
+			packet, ok = device.salamanderDeobfuscate(packet)
+			if !ok {
 				continue
 			}
 
-			// check size of packet
-			packet := bufsArrs[i][:size]
+			if len(packet) < MinMessageSize {
+				continue
+			}
 
 			cip, err := device.HeaderProtectionCipher(packet[:HeaderCipherNonceSize])
 			if err != nil {
