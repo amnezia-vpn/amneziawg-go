@@ -32,6 +32,7 @@ type QueueInboundElement struct {
 	counter  uint64
 	keypair  *Keypair
 	endpoint conn.Endpoint
+	padding  uint32
 }
 
 type QueueInboundElementsContainer struct {
@@ -59,7 +60,8 @@ func (peer *Peer) keepKeyFreshReceiving() {
 		return
 	}
 	keypair := peer.keypairs.Current()
-	if keypair != nil && keypair.isInitiator && time.Since(keypair.created) > (RejectAfterTime-KeepaliveTimeout-RekeyTimeout) {
+
+	if keypair != nil && keypair.isInitiator && time.Since(keypair.created) > peer.device.keyRefreshTimeoutReceiving() {
 		peer.timers.sentLastMinuteHandshake.Store(true)
 		peer.SendHandshakeInitiation(false)
 	}
@@ -95,6 +97,7 @@ func (device *Device) RoutineReceiveIncoming(
 		endpoints   = make([]conn.Endpoint, maxBatchSize)
 		deathSpiral int
 		elemsByPeer = make(map[*Peer]*QueueInboundElementsContainer, maxBatchSize)
+		typeHashBuf [4]byte
 	)
 
 	for i := range maxBatchSize {
@@ -138,11 +141,24 @@ func (device *Device) RoutineReceiveIncoming(
 			// check size of packet
 			packet := bufsArrs[i][:size]
 
+			cip, err := device.HeaderProtectionCipher(packet[:HeaderCipherNonceSize])
+			if err != nil {
+				device.log.Errorf("Failed to initialize header cipher")
+				continue
+			}
+
+			typeHash := typeHashBuf[:]
+			clear(typeHash)
+			if cip != nil {
+				cip.XORKeyStream(typeHash, typeHash)
+			}
+
 			// get message padding and type based on information from S1-S4 and H1-H4
-			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
-			if padding > 0 {
-				copy(packet, packet[padding:])
-				packet = packet[:len(packet)-padding]
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType, typeHash)
+			packet = packet[padding:]
+
+			if cip != nil {
+				applyHash(packet[:4], packet[:4], typeHash)
 			}
 
 			switch msgType {
@@ -155,6 +171,9 @@ func (device *Device) RoutineReceiveIncoming(
 
 				if len(packet) < MessageTransportSize {
 					continue
+				}
+				if cip != nil {
+					cip.XORKeyStream(packet[4:MessageTransportHeaderSize], packet[4:MessageTransportHeaderSize])
 				}
 
 				// lookup key pair
@@ -170,7 +189,7 @@ func (device *Device) RoutineReceiveIncoming(
 
 				// check keypair expiry
 
-				if keypair.created.Add(RejectAfterTime).Before(time.Now()) {
+				if keypair.created.Add(device.keychainExpireTime()).Before(time.Now()) {
 					continue
 				}
 
@@ -182,6 +201,7 @@ func (device *Device) RoutineReceiveIncoming(
 				elem.keypair = keypair
 				elem.endpoint = endpoints[i]
 				elem.counter = 0
+				elem.padding = padding
 
 				elemsForPeer, ok := elemsByPeer[peer]
 				if !ok {
@@ -200,15 +220,24 @@ func (device *Device) RoutineReceiveIncoming(
 				if len(packet) != MessageInitiationSize {
 					continue
 				}
+				if cip != nil {
+					cip.XORKeyStream(packet[4:MessageInitiationSize], packet[4:MessageInitiationSize])
+				}
 
 			case MessageResponseType:
 				if len(packet) != MessageResponseSize {
 					continue
 				}
+				if cip != nil {
+					cip.XORKeyStream(packet[4:MessageResponseSize], packet[4:MessageResponseSize])
+				}
 
 			case MessageCookieReplyType:
 				if len(packet) != MessageCookieReplySize {
 					continue
+				}
+				if cip != nil {
+					cip.XORKeyStream(packet[4:MessageCookieReplySize], packet[4:MessageCookieReplySize])
 				}
 
 			default:
@@ -529,10 +558,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 				continue
 			}
 
-			bufs = append(
-				bufs,
-				elem.buffer[:MessageTransportOffsetContent+len(elem.packet)],
-			)
+			bufs = append(bufs, elem.buffer[int(elem.padding):int(elem.padding)+MessageTransportOffsetContent+len(elem.packet)])
 		}
 
 		peer.rxBytes.Add(rxBytesLen)
@@ -560,52 +586,59 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 	}
 }
 
-func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32) (uint32, int) {
+func applyHash(dst, src, hash []byte) {
+	for i := range len(dst) {
+		dst[i] = src[i] ^ hash[i]
+	}
+}
+
+func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32, typeHash []byte) (uint32, uint32) {
+	var headerBytes [4]byte
 	size := len(packet)
 
 	if expectedType == MessageUnknownType || expectedType == MessageInitiationType {
-		padding := device.paddings.init
-		header := device.headers.init
+		padding := device.paddings.init.Load()
+		header := device.headers.init.Load()
 
-		if size == padding+MessageInitiationSize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+		if size == int(padding)+MessageInitiationSize {
+			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageInitiationType, padding
 			}
 		}
 	}
 
 	if expectedType == MessageUnknownType || expectedType == MessageResponseType {
-		padding := device.paddings.response
-		header := device.headers.response
+		padding := device.paddings.response.Load()
+		header := device.headers.response.Load()
 
-		if size == padding+MessageResponseSize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+		if size == int(padding)+MessageResponseSize {
+			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageResponseType, padding
 			}
 		}
 	}
 
 	if expectedType == MessageUnknownType || expectedType == MessageCookieReplyType {
-		padding := device.paddings.cookie
-		header := device.headers.cookie
+		padding := device.paddings.cookie.Load()
+		header := device.headers.cookie.Load()
 
-		if size == padding+MessageCookieReplySize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+		if size == int(padding)+MessageCookieReplySize {
+			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageCookieReplyType, padding
 			}
 		}
 	}
 
 	if expectedType == MessageUnknownType || expectedType == MessageTransportType {
-		padding := device.paddings.transport
-		header := device.headers.transport
+		padding := device.paddings.transport.Load()
+		header := device.headers.transport.Load()
 
-		if size >= padding+MessageTransportHeaderSize {
-			data := packet[padding:]
-			if header.Validate(binary.LittleEndian.Uint32(data)) {
+		if size >= int(padding)+MessageTransportHeaderSize {
+			applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+			if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
 				return MessageTransportType, padding
 			}
 		}
