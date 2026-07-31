@@ -78,7 +78,7 @@ Header protection is the mechanism of protecting low-entropy values of packets' 
 > Use `awg genkey` to generate header protection key
 
 > [!IMPORTANT]
-> Header protection requires `S1-S4` value to be 8 at least
+> Header protection requires `S1-S4` value to be 12 at least
 
 ### Content padding [AWG 3+]
 
