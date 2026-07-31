@@ -807,6 +807,13 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 		}
 	}
 
+	paddings := []uint32{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
+	for i, padding := range paddings {
+		if padding >= uint32(MaxMessageSize-MessageTransportHeaderSize) {
+			return fmt.Errorf("S%d padding must leave room for at least one byte in the TUN buffer", i+1)
+		}
+	}
+
 	device.log.Verbosef("UAPI: Updating h1 padding")
 	device.headers.init.Store(d.headers.init)
 
@@ -820,7 +827,6 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headers.transport.Store(d.headers.transport)
 
 	if !d.headerProtectionKey.IsZero() {
-		paddings := []uint32{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
 		for i, padding := range paddings {
 			if padding < HeaderCipherNonceSize {
 				return fmt.Errorf("S%d must be more then %d to use headerProtection", i, HeaderCipherNonceSize)
