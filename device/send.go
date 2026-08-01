@@ -628,7 +628,15 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		dataSent := false
 		elemsContainer.Lock()
 		for _, elem := range elemsContainer.elems {
-			if len(elem.packet) != MessageKeepaliveSize {
+			// A keepalive carries no user data, so it must NOT arm the
+			// data-sent timers. Since AWG 2.0 the sealed packet is prefixed
+			// with elem.padding bytes of S4 crypto padding (RoutineEncryption
+			// seals from elem.buffer[:elem.padding+MessageTransportHeaderSize]),
+			// so a keepalive measures elem.padding+MessageKeepaliveSize, not
+			// MessageKeepaliveSize. Comparing against the bare constant made
+			// every keepalive look like data whenever S4 > 0, which armed
+			// newHandshake (~15 s) on an idle tunnel and re-handshaked forever.
+			if len(elem.packet) != int(elem.padding)+MessageKeepaliveSize {
 				dataSent = true
 			}
 
