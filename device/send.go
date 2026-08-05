@@ -48,12 +48,13 @@ import (
  */
 
 type QueueOutboundElement struct {
-	buffer  *[MaxMessageSize]byte // slice holding the packet data
-	packet  []byte                // slice of "buffer" (always!)
-	nonce   uint64                // nonce for encryption
-	keypair *Keypair              // keypair for encryption
-	peer    *Peer                 // related peer
-	padding uint32
+	buffer      *[MaxMessageSize]byte // slice holding the packet data
+	packet      []byte                // slice of "buffer" (always!)
+	nonce       uint64                // nonce for encryption
+	keypair     *Keypair              // keypair for encryption
+	peer        *Peer                 // related peer
+	padding     uint32
+	isKeepalive bool
 }
 
 type QueueOutboundElementsContainer struct {
@@ -66,6 +67,7 @@ func (device *Device) NewOutboundElement() *QueueOutboundElement {
 	elem.buffer = device.GetMessageBuffer()
 	elem.nonce = 0
 	elem.padding = device.paddings.transport.Load()
+	elem.isKeepalive = false
 	// keypair and peer were cleared (if necessary) by clearPointers.
 	return elem
 }
@@ -86,6 +88,7 @@ func (elem *QueueOutboundElement) clearPointers() {
 func (peer *Peer) SendKeepalive() {
 	if len(peer.queue.staged) == 0 && peer.isRunning.Load() {
 		elem := peer.device.NewOutboundElement()
+		elem.isKeepalive = true
 		elemsContainer := peer.device.GetOutboundElementsContainer()
 		elemsContainer.elems = append(elemsContainer.elems, elem)
 		select {
@@ -628,7 +631,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		dataSent := false
 		elemsContainer.Lock()
 		for _, elem := range elemsContainer.elems {
-			if len(elem.packet) != MessageKeepaliveSize {
+			if !elem.isKeepalive {
 				dataSent = true
 			}
 

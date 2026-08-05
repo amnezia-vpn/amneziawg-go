@@ -510,7 +510,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 			}
 			rxBytesLen += uint64(len(elem.packet) + MinMessageSize)
 
-			if len(elem.packet) == 0 {
+			if len(elem.packet) == 0 || elem.packet[0] == 0 {
 				device.log.Verbosef("%v - Receiving keepalive packet", peer)
 				continue
 			}
