@@ -134,7 +134,19 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
-	err := peer.device.net.bind.Send(buffers, endpoint)
+	sendBuffers := buffers
+	if peer.device.salamanderEnabled() {
+		sendBuffers = make([][]byte, 0, len(buffers))
+		for _, buffer := range buffers {
+			obfuscated, err := peer.device.salamanderObfuscate(buffer)
+			if err != nil {
+				return err
+			}
+			sendBuffers = append(sendBuffers, obfuscated)
+		}
+	}
+
+	err := peer.device.net.bind.Send(sendBuffers, endpoint)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {

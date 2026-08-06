@@ -110,6 +110,8 @@ type Device struct {
 		transport atomic.Uint32
 	}
 
+	obfsPSK NoisePresharedKey
+
 	ipackets [5]*obfChain
 
 	headerProtection struct {
