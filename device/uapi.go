@@ -266,6 +266,11 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 			continue
 		}
 
+		if tunFilterSupported && key == "x_tunfilter" {
+			device.tunFilterConfigure(value)
+			continue
+		}
+
 		var err error
 		if deviceConfig {
 			err = device.handleDeviceLine(ipcDev, key, value)
