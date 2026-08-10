@@ -126,6 +126,8 @@ type Device struct {
 		keepaliveTimeoutSec AtomicUintRange
 		maxHandshakeAttemps AtomicUintRange
 	}
+
+	tunFilterCache tunFilterCacheHolder
 }
 
 // deviceState represents the state of a Device.

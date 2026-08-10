@@ -327,6 +327,10 @@ func (device *Device) RoutineReadFromTUN() {
 			elem.packet = bufs[i][offset : offset+sizes[i]]
 			elem.padding = padding
 
+			if tunFilterSupported && tunFilterActive && !device.tunFilterAllows(elem.packet) {
+				continue
+			}
+
 			// lookup peer
 			var peer *Peer
 			switch elem.packet[0] >> 4 {
