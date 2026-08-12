@@ -146,8 +146,10 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
 
-	padding := peer.device.paddings.init.Load()
-	buf := make([]byte, padding+MessageInitiationSize)
+	padding := int(peer.device.paddings.init.Load())
+	trailerLen := max(peer.randomTrailer(padding+MessageInitiationSize), 0)
+
+	buf := make([]byte, padding+MessageInitiationSize+trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
@@ -167,6 +169,9 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	if cip != nil {
 		cip.XORKeyStream(packet, packet)
 	}
+
+	trailer := buf[padding+MessageInitiationSize:]
+	rand.Read(trailer)
 
 	sendBuffer = append(sendBuffer, buf)
 	err = peer.SendBuffers(sendBuffer)
@@ -191,8 +196,10 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	padding := peer.device.paddings.response.Load()
-	buf := make([]byte, padding+MessageResponseSize)
+	padding := int(peer.device.paddings.response.Load())
+	trailerLen := max(peer.randomTrailer(padding+MessageResponseSize), 0)
+
+	buf := make([]byte, padding+MessageResponseSize+trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
@@ -220,6 +227,9 @@ func (peer *Peer) SendHandshakeResponse() error {
 		cip.XORKeyStream(packet, packet)
 	}
 
+	trailer := buf[padding+MessageResponseSize:]
+	rand.Read(trailer)
+
 	// TODO: allocation could be avoided
 	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
@@ -229,6 +239,11 @@ func (peer *Peer) SendHandshakeResponse() error {
 }
 
 func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement) error {
+	if device.disableCookies.Load() {
+		device.log.Verbosef("Sending cookie response blocked for %v due to disabled cookies", initiatingElem.endpoint.DstToString())
+		return nil
+	}
+
 	device.log.Verbosef("Sending cookie response for denied handshake message for %v", initiatingElem.endpoint.DstToString())
 
 	sender := binary.LittleEndian.Uint32(initiatingElem.packet[4:8])
@@ -245,8 +260,10 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		return err
 	}
 
-	padding := device.paddings.cookie.Load()
-	buf := make([]byte, padding+MessageCookieReplySize)
+	padding := int(device.paddings.cookie.Load())
+	trailerLen := max(device.randomTrailer(padding+MessageCookieReplySize), 0)
+
+	buf := make([]byte, padding+MessageCookieReplySize, trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
@@ -262,6 +279,9 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	if cip != nil {
 		cip.XORKeyStream(packet, packet)
 	}
+
+	trailer := buf[padding+MessageCookieReplySize:]
+	rand.Read(trailer)
 
 	// TODO: allocation could be avoided
 	device.net.bind.Send([][]byte{buf}, initiatingElem.endpoint)
@@ -531,6 +551,29 @@ func (device *Device) randomPaddingAddition(packetSize, mtu int) int {
 	return add
 }
 
+func (device *Device) randomTrailer(packetSize int) int {
+	if !device.randomTrailers.Load() {
+		return -1
+	}
+
+	if DefaultUdpWindow < packetSize {
+		return 0
+	}
+	return int(fastrandn(uint32(DefaultUdpWindow - packetSize)))
+}
+
+func (peer *Peer) randomTrailer(packetSize int) int {
+	if !peer.device.randomTrailers.Load() {
+		return -1
+	}
+
+	udpWindow := int(peer.udpWindow.Load())
+	if udpWindow < packetSize {
+		return 0
+	}
+	return int(fastrandn(uint32(udpWindow - packetSize)))
+}
+
 /* Encrypts the elements in the queue
  * and marks them for sequential consumption (by releasing the mutex)
  *
@@ -544,6 +587,11 @@ func (device *Device) RoutineEncryption(id int) {
 
 	for elemsContainer := range device.queue.encryption.c {
 		for _, elem := range elemsContainer.elems {
+			udpWindow := elem.padding + MinMessageSize + uint32(len(elem.packet))
+			if elem.peer.udpWindow.Load() < udpWindow {
+				elem.peer.udpWindow.Store(udpWindow)
+			}
+
 			// fill crypto padding
 			crypt := elem.buffer[:elem.padding]
 			rand.Read(crypt)
@@ -563,6 +611,9 @@ func (device *Device) RoutineEncryption(id int) {
 			mtu := int(device.tun.mtu.Load())
 
 			paddingSize := device.randomPaddingAddition(packetSize, mtu)
+			if paddingSize < 0 {
+				paddingSize = elem.peer.randomTrailer(packetSize + MinMessageSize + int(elem.padding))
+			}
 			if paddingSize < 0 {
 				// pad content to multiple of 16
 				paddingSize = calculatePaddingSize(packetSize, mtu)
