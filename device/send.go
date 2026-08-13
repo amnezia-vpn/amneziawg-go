@@ -333,17 +333,36 @@ func (device *Device) RoutineReadFromTUN() {
 	}()
 
 	for {
-		padding := device.paddings.transport.Load()
-		offset := MessageTransportHeaderSize + int(padding)
+		readPadding := device.paddings.transport.Load()
+		readOffset := MessageTransportHeaderSize + int(readPadding)
 
 		// read packets
-		count, readErr = device.tun.device.Read(bufs, sizes, offset)
+		count, readErr = device.tun.device.Read(bufs, sizes, readOffset)
 		for i := 0; i < count; i++ {
 			if sizes[i] < 1 {
 				continue
 			}
 
 			elem := elems[i]
+			padding := readPadding
+			offset := readOffset
+
+			// The TUN read may have blocked while a UAPI configuration update
+			// changed S4. Rebase the packet so its transport header and content
+			// remain aligned with the current transport padding.
+			if currentPadding := device.paddings.transport.Load(); currentPadding != padding {
+				currentOffset := MessageTransportHeaderSize + int(currentPadding)
+				if sizes[i] > len(bufs[i])-currentOffset {
+					continue
+				}
+				copy(
+					bufs[i][currentOffset:currentOffset+sizes[i]],
+					bufs[i][offset:offset+sizes[i]],
+				)
+				padding = currentPadding
+				offset = currentOffset
+			}
+
 			elem.packet = bufs[i][offset : offset+sizes[i]]
 			elem.padding = padding
 
