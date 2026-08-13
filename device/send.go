@@ -338,6 +338,22 @@ func (device *Device) RoutineReadFromTUN() {
 
 		// read packets
 		count, readErr = device.tun.device.Read(bufs, sizes, offset)
+
+		// The padding was read before the blocking read above, so a UAPI update
+		// that lands while we are waiting leaves the packets at an offset that
+		// no longer matches it. Move them, otherwise they go out with the old
+		// padding and the peer cannot locate the message type in them.
+		if updated := device.paddings.transport.Load(); updated != padding {
+			newOffset := MessageTransportHeaderSize + int(updated)
+			for i := 0; i < count; i++ {
+				if sizes[i] < 1 {
+					continue
+				}
+				copy(bufs[i][newOffset:newOffset+sizes[i]], bufs[i][offset:offset+sizes[i]])
+			}
+			padding, offset = updated, newOffset
+		}
+
 		for i := 0; i < count; i++ {
 			if sizes[i] < 1 {
 				continue

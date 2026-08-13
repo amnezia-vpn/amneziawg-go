@@ -249,6 +249,19 @@ func TestAWGDevicePing(t *testing.T) {
 	})
 }
 
+// The TUN reader picks up the transport padding once, before it blocks on the
+// first read, and that happens in NewDevice - before IpcSet has had a chance to
+// set S4. The first packet used to go out without the padding, and the peer
+// dropped it because the message type was not where S4 said it would be.
+func TestAWGDeviceFirstPacketWithTransportPadding(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPair(t, true, "s4", "25")
+	t.Run("first packet", func(t *testing.T) {
+		pair.Send(t, Ping, nil)
+	})
+}
+
 // Needs to be stopped with Ctrl-C
 func TestAWGHandshakeDevicePing(t *testing.T) {
 	t.Skip("This test is intended to be run manually, not as part of the test suite.")
