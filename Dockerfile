@@ -6,7 +6,7 @@ RUN go mod download && \
     go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /usr/bin
 
 FROM alpine:3.19 as tools
-ARG AWGTOOLS_COMMIT="v3.0.20260730"
+ARG AWGTOOLS_COMMIT="v3.1.20260812"
 
 RUN apk add --no-cache git build-base linux-headers && \
     git clone https://github.com/amnezia-vpn/amneziawg-tools.git /amneziawg-tools && \
