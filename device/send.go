@@ -263,7 +263,7 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	padding := int(device.paddings.cookie.Load())
 	trailerLen := max(device.randomTrailer(padding+MessageCookieReplySize), 0)
 
-	buf := make([]byte, padding+MessageCookieReplySize, trailerLen)
+	buf := make([]byte, padding+MessageCookieReplySize+trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
