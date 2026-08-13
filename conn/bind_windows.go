@@ -582,6 +582,24 @@ func (bind *WinRingBind) BindSocketToInterface6(interfaceIndex uint32, blackhole
 	return nil
 }
 
+func (bind *WinRingBind) PeekLookAtSocketFd4() (fd int, err error) {
+	bind.mu.RLock()
+	defer bind.mu.RUnlock()
+	if bind.isOpen.Load() != 1 {
+		return -1, net.ErrClosed
+	}
+	return int(bind.v4.sock), nil
+}
+
+func (bind *WinRingBind) PeekLookAtSocketFd6() (fd int, err error) {
+	bind.mu.RLock()
+	defer bind.mu.RUnlock()
+	if bind.isOpen.Load() != 1 {
+		return -1, net.ErrClosed
+	}
+	return int(bind.v6.sock), nil
+}
+
 func bindSocketToInterface4(handle windows.Handle, interfaceIndex uint32) error {
 	const IP_UNICAST_IF = 31
 	/* MSDN says for IPv4 this needs to be in net byte order, so that it's like an IP address with leading zeros. */
