@@ -333,14 +333,20 @@ func (device *Device) RoutineReadFromTUN() {
 	}()
 
 	for {
-		padding := device.paddings.transport.Load()
-		offset := MessageTransportHeaderSize + int(padding)
+		readPadding := device.paddings.transport.Load()
+		readOffset := MessageTransportHeaderSize + int(readPadding)
 
 		// read packets
-		count, readErr = device.tun.device.Read(bufs, sizes, offset)
+		count, readErr = device.tun.device.Read(bufs, sizes, readOffset)
+		padding := device.paddings.transport.Load()
+		offset := MessageTransportHeaderSize + int(padding)
 		for i := 0; i < count; i++ {
 			if sizes[i] < 1 {
 				continue
+			}
+
+			if offset != readOffset {
+				copy(bufs[i][offset:offset+sizes[i]], bufs[i][readOffset:readOffset+sizes[i]])
 			}
 
 			elem := elems[i]
