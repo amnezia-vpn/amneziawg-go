@@ -93,6 +93,10 @@ func TestTransportPaddingAppliedWhenConfiguredAfterStartup(t *testing.T) {
 		ips[i] = netip.AddrFrom4([4]byte{1, 0, 0, byte(i + 1)})
 
 		devs[i] = NewDevice(probes[i], binds[i], NewLogger(LogLevelError, fmt.Sprintf("dev%d: ", i)))
+		// Registered before the first thing that can fail, so a device already
+		// built is still closed if a later one aborts the test.
+		t.Cleanup(devs[i].Close)
+
 		if err := devs[i].IpcSet(cfg[i]); err != nil {
 			t.Fatalf("failed to configure device %d: %v", i, err)
 		}
@@ -105,7 +109,6 @@ func TestTransportPaddingAppliedWhenConfiguredAfterStartup(t *testing.T) {
 		if err := devs[i].IpcSet(endpointCfg[i]); err != nil {
 			t.Fatalf("failed to configure device endpoint %d: %v", i, err)
 		}
-		t.Cleanup(devs[i].Close)
 	}
 
 	// Both readers are now parked in Read, holding an offset they computed
