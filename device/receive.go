@@ -626,9 +626,24 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 	//
 	// Testing transport first when trailers are on avoids that. Classification
 	// is a local decision that never appears on the wire, so the order costs no
-	// interoperability; it moves the same collision onto handshake messages,
-	// which are rare and retried, rather than onto every data packet.
-	if randomTrailers {
+	// interoperability; it moves the collision onto handshake messages, which
+	// are rare and retried, rather than onto every data packet. The residual
+	// handshake loss is |H4|/2^32 -- ~1.2% at the generator's width, negligible
+	// against 18 retries, but it grows linearly with H4, so a hand-configured
+	// H4 orders of magnitude wider trades data throughput for slower handshake
+	// establishment rather than being a free win.
+	//
+	// A datagram whose length is exactly a padded handshake size is exempt: for
+	// those the `==` test is unambiguous, so it is left to run first and stays
+	// deterministic. That is not a corner case -- peer.randomTrailer returns 0
+	// while udpWindow is below the packet size, and udpWindow starts at 0, so
+	// the first initiation to a fresh peer always has exactly S1+148 bytes.
+	exactHandshakeSize := size == int(device.paddings.init.Load())+MessageInitiationSize ||
+		size == int(device.paddings.response.Load())+MessageResponseSize ||
+		size == int(device.paddings.cookie.Load())+MessageCookieReplySize
+
+	transportFirst := randomTrailers && !exactHandshakeSize
+	if transportFirst {
 		if msgSize, msgType, padding, ok := device.determineTransport(packet, typeHash); ok {
 			return msgSize, msgType, padding
 		}
@@ -667,7 +682,7 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 		}
 	}
 
-	if !randomTrailers {
+	if !transportFirst {
 		if msgSize, msgType, padding, ok := device.determineTransport(packet, typeHash); ok {
 			return msgSize, msgType, padding
 		}
