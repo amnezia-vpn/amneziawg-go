@@ -610,6 +610,30 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 	size := len(packet)
 	randomTrailers := device.randomTrailers.Load()
 
+	// With random trailers enabled the three handshake size tests below relax
+	// from `==` to `>`, because a trailer makes a handshake message longer than
+	// its fixed size. That same relaxation makes each of them match a full-size
+	// transport packet, which is longer than any handshake message. All that
+	// then separates a data packet from a handshake misparse is the type-range
+	// test -- and for a transport packet those four bytes sit in ciphertext, so
+	// they are uniformly random.
+	//
+	// A header range spanning n of the 2^32 values therefore claims n/2^32 of
+	// every data packet, and the handshake ranges are tried first. With the
+	// ~50-million-wide ranges the config generator emits that is ~3.5% of all
+	// transport packets dropped as unparseable handshakes, which collapses a
+	// TCP sender.
+	//
+	// Testing transport first when trailers are on avoids that. Classification
+	// is a local decision that never appears on the wire, so the order costs no
+	// interoperability; it moves the same collision onto handshake messages,
+	// which are rare and retried, rather than onto every data packet.
+	if randomTrailers {
+		if msgSize, msgType, padding, ok := device.determineTransport(packet, typeHash); ok {
+			return msgSize, msgType, padding
+		}
+	}
+
 	padding = device.paddings.init.Load()
 	header = device.headers.init.Load()
 	expectedSize = int(padding) + MessageInitiationSize
@@ -643,16 +667,31 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 		}
 	}
 
-	padding = device.paddings.transport.Load()
-	header = device.headers.transport.Load()
-	expectedSize = int(padding) + MessageTransportSize
-
-	if size >= expectedSize {
-		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
-			return MessageTransportSize, MessageTransportType, padding
+	if !randomTrailers {
+		if msgSize, msgType, padding, ok := device.determineTransport(packet, typeHash); ok {
+			return msgSize, msgType, padding
 		}
 	}
 
 	return 0, MessageUnknownType, 0
+}
+
+// determineTransport applies the transport message test: the datagram is long
+// enough to hold a transport message after its S4 padding, and the four bytes
+// at that offset decode to a value inside H4.
+func (device *Device) determineTransport(packet []byte, typeHash []byte) (int, uint32, uint32, bool) {
+	var headerBytes [4]byte
+
+	padding := device.paddings.transport.Load()
+	header := device.headers.transport.Load()
+	expectedSize := int(padding) + MessageTransportSize
+
+	if len(packet) >= expectedSize {
+		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
+			return MessageTransportSize, MessageTransportType, padding, true
+		}
+	}
+
+	return 0, MessageUnknownType, 0, false
 }
