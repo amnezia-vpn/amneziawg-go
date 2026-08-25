@@ -333,14 +333,39 @@ func (device *Device) RoutineReadFromTUN() {
 	}()
 
 	for {
+		// The offset has to be chosen before the read, but Read blocks, so S4
+		// can be configured -- or reconfigured -- while we are parked in it.
+		// This routine starts in NewDevice, before IpcSet has applied the
+		// interface config at all, so the very first read is normally issued
+		// with a stale S4 of 0.
+		readPadding := device.paddings.transport.Load()
+		readOffset := MessageTransportHeaderSize + int(readPadding)
+
+		// read packets
+		count, readErr = device.tun.device.Read(bufs, sizes, readOffset)
+
+		// Re-read S4 now that the packets are in hand and re-align them if it
+		// moved. RoutineEncryption writes the transport header at
+		// buffer[padding:padding+MessageTransportHeaderSize] and requires the
+		// payload to follow it directly, so sending at the stale offset would
+		// put the type field where the peer does not look for it: the peer
+		// classifies the datagram as unknown and silently drops it.
 		padding := device.paddings.transport.Load()
 		offset := MessageTransportHeaderSize + int(padding)
 
-		// read packets
-		count, readErr = device.tun.device.Read(bufs, sizes, offset)
 		for i := 0; i < count; i++ {
 			if sizes[i] < 1 {
 				continue
+			}
+
+			if offset != readOffset {
+				if offset+sizes[i] > len(bufs[i]) {
+					// A larger S4 leaves no room for this packet; dropping it
+					// is better than emitting one the peer cannot classify.
+					continue
+				}
+				// copy is memmove-safe for overlapping slices.
+				copy(bufs[i][offset:offset+sizes[i]], bufs[i][readOffset:readOffset+sizes[i]])
 			}
 
 			elem := elems[i]
