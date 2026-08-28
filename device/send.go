@@ -530,23 +530,22 @@ func calculatePaddingSize(packetSize, mtu int) int {
 	return paddedSize - lastUnit
 }
 
-func (device *Device) randomPaddingAddition(packetSize, mtu int) int {
-	addition := device.contentPaddingAddition.Load()
+func (peer *Peer) randomPaddingAddition(packetSize int) int {
+	addition := peer.device.contentPaddingAddition.Load()
 
 	if addition.IsZero() {
 		return -1
 	}
 
-	add := int(addition.PickOne())
-	if mtu != 0 {
-		if packetSize > mtu {
-			packetSize %= mtu
-		}
+	udpWindow := int(peer.udpWindow.Load())
+	if udpWindow < packetSize {
+		return 0
+	}
 
-		space := mtu - packetSize
-		if add > space {
-			add = space
-		}
+	add := int(addition.PickOne())
+	space := udpWindow - packetSize
+	if add > space {
+		add = space
 	}
 	return add
 }
@@ -607,16 +606,16 @@ func (device *Device) RoutineEncryption(id int) {
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 
-			packetSize := len(elem.packet)
+			packetSize := len(elem.packet) + MinMessageSize + int(elem.padding)
 			mtu := int(device.tun.mtu.Load())
 
-			paddingSize := device.randomPaddingAddition(packetSize, mtu)
+			paddingSize := elem.peer.randomPaddingAddition(packetSize)
 			if paddingSize < 0 {
-				paddingSize = elem.peer.randomTrailer(packetSize + MinMessageSize + int(elem.padding))
+				paddingSize = elem.peer.randomTrailer(packetSize)
 			}
 			if paddingSize < 0 {
 				// pad content to multiple of 16
-				paddingSize = calculatePaddingSize(packetSize, mtu)
+				paddingSize = calculatePaddingSize(len(elem.packet), mtu)
 			}
 
 			// append trailing zeroes
