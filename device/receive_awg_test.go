@@ -27,12 +27,16 @@ const (
 )
 
 func awgTestDevice(randomTrailers bool) *Device {
+	return awgTestDeviceWithPaddings(randomTrailers, testS1, testS2, testS3, testS4)
+}
+
+func awgTestDeviceWithPaddings(randomTrailers bool, s1, s2, s3, s4 uint32) *Device {
 	device := new(Device)
 
-	device.paddings.init.Store(testS1)
-	device.paddings.response.Store(testS2)
-	device.paddings.cookie.Store(testS3)
-	device.paddings.transport.Store(testS4)
+	device.paddings.init.Store(s1)
+	device.paddings.response.Store(s2)
+	device.paddings.cookie.Store(s3)
+	device.paddings.transport.Store(s4)
 
 	var r UintRange
 	r.FromUint32(testH1Lo, testH1Lo+testRangeWidth)
@@ -51,8 +55,8 @@ func awgTestDevice(randomTrailers bool) *Device {
 // A well-formed transport datagram: S4 bytes of crypto padding, a type value
 // drawn from H4, then ciphertext-shaped bytes. Deterministic in seed so a
 // failure reproduces exactly.
-func awgTransportDatagram(seed uint64, payloadLen int) []byte {
-	buf := make([]byte, testS4+MessageTransportSize+payloadLen)
+func awgTransportDatagramWithPadding(seed uint64, payloadLen int, s4 uint32) []byte {
+	buf := make([]byte, int(s4)+MessageTransportSize+payloadLen)
 
 	x := seed*6364136223846793005 + 1
 	for i := range buf {
@@ -61,20 +65,25 @@ func awgTransportDatagram(seed uint64, payloadLen int) []byte {
 	}
 
 	msgType := uint32(testH4Lo) + uint32(seed%testRangeWidth)
-	binary.LittleEndian.PutUint32(buf[testS4:testS4+4], msgType)
+	binary.LittleEndian.PutUint32(buf[s4:s4+4], msgType)
 	return buf
 }
 
 func countMisclassified(t *testing.T, randomTrailers bool, n int) int {
 	t.Helper()
-	device := awgTestDevice(randomTrailers)
+	return countMisclassifiedWithPaddings(t, randomTrailers, n, testS1, testS2, testS3, testS4)
+}
+
+func countMisclassifiedWithPaddings(t *testing.T, randomTrailers bool, n int, s1, s2, s3, s4 uint32) int {
+	t.Helper()
+	device := awgTestDeviceWithPaddings(randomTrailers, s1, s2, s3, s4)
 	typeHash := make([]byte, 4) // header protection off
 
 	wrong := 0
 	for i := 0; i < n; i++ {
-		packet := awgTransportDatagram(uint64(i), 1373)
+		packet := awgTransportDatagramWithPadding(uint64(i), 1373, s4)
 		_, msgType, padding := device.DeterminePacketTypeAndPadding(packet, typeHash)
-		if msgType != MessageTransportType || padding != testS4 {
+		if msgType != MessageTransportType || padding != s4 {
 			wrong++
 		}
 	}
@@ -104,6 +113,37 @@ func TestDeterminePacketTypeTransportNotStolenByRelaxedHandshakeSizes(t *testing
 	if wrong := countMisclassified(t, true, n); wrong != 0 {
 		t.Errorf(
 			"random trailers on: %d/%d transport packets misclassified as handshakes (%.3f%%)",
+			wrong, n, 100*float64(wrong)/float64(n),
+		)
+	}
+}
+
+// TestDeterminePacketTypeEqualPaddingsNeverCollide pins the configuration
+// dependency behind the bug above, so it stays visible in code rather than
+// living only in prose.
+//
+// Every branch of DeterminePacketTypeAndPadding reads its candidate type field
+// at *its own* S offset. That is what makes the collision possible: with S1-S4
+// all different, the initiation/response/cookie branches read a wrong offset in
+// a transport packet and get ciphertext, which is uniformly random and lands in
+// a 50-million-wide H range ~1.16% of the time each.
+//
+// Set S1 = S2 = S3 = S4 and the collision disappears entirely. Every branch then
+// reads the *real* type field, which was drawn from H4 -- and since H1-H4 must
+// not overlap, it cannot match H1, H2 or H3. This is why upstream documentation
+// recommends equal S values whenever RandomTrailers is enabled.
+//
+// This passes both before and after the fix. It is a guard, not a reproducer:
+// it documents why some deployments never saw the bug, and it fails if a future
+// change makes classification depend on something other than the type ranges.
+func TestDeterminePacketTypeEqualPaddingsNeverCollide(t *testing.T) {
+	const n = 200_000
+	const s = 12 // the minimum HeaderProtectionKey allows; any equal value works
+
+	if wrong := countMisclassifiedWithPaddings(t, true, n, s, s, s, s); wrong != 0 {
+		t.Errorf(
+			"equal paddings, random trailers on: %d/%d transport packets misclassified (%.3f%%); "+
+				"expected 0 -- every branch reads the true type field, which only H4 contains",
 			wrong, n, 100*float64(wrong)/float64(n),
 		)
 	}
