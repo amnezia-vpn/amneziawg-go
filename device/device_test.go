@@ -188,6 +188,14 @@ func genTestPair(
 			level = LogLevelError
 		}
 		p.dev = NewDevice(p.tun.TUN(), binds[i], NewLogger(level, fmt.Sprintf("dev%d: ", i)))
+
+		select {
+		case <-p.tun.ReadStarted():
+		case <-time.After(time.Second):
+			p.dev.Close()
+			tb.Fatalf("TUN reader for device %d did not start", i)
+		}
+
 		if err := p.dev.IpcSet(cfg[i]); err != nil {
 			tb.Errorf("failed to configure device %d: %v", i, err)
 			p.dev.Close()
@@ -224,6 +232,13 @@ func TestTwoDevicePing(t *testing.T) {
 	})
 }
 
+func TestS4ConfiguredWhileTUNReadBlocked(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPair(t, true, "s4", "25")
+	pair.Send(t, Ping, nil)
+}
+
 // Run test with -race=false to avoid the race for setting the default msgTypes 2 times
 func TestAWGDevicePing(t *testing.T) {
 	goroutineLeakCheck(t)
@@ -246,6 +261,76 @@ func TestAWGDevicePing(t *testing.T) {
 	})
 	t.Run("ping 1.0.0.2", func(t *testing.T) {
 		pair.Send(t, Pong, nil)
+	})
+}
+
+func TestAWG3DevicePing(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPair(t, true,
+		"jc", "6",
+		"jmin", "10",
+		"jmax", "50",
+		"s1", "87",
+		"s2", "23",
+		"s3", "12",
+		"s4", "15",
+		"h1", "335621506-947879090",
+		"h2", "1362325490-1883963371",
+		"h3", "2101810250-2138881068",
+		"h4", "2142245514-2145625027",
+		"header_protection_key", "d3a61555310d751bb36b70733da9b2325bbf0eba909367bd8138f910a881666f",
+		"content_padding_addition", "100",
+		"rekey_after_time", "120",
+		"rekey_timeout", "5",
+		"reject_after_time", "180",
+		"keepalive_timeout", "10",
+		"max_handshake_attempts", "5",
+	)
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		pair.Send(t, Ping, nil)
+	})
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		pair.Send(t, Pong, nil)
+	})
+}
+
+func TestHeaderProtectionRequiresAtLeast12BytesOfPadding(t *testing.T) {
+	tunDevice := tuntest.NewChannelTUN()
+	binds := bindtest.NewChannelBinds()
+	dev := NewDevice(tunDevice.TUN(), binds[0], NewLogger(LogLevelSilent, ""))
+	t.Cleanup(dev.Close)
+
+	const headerProtectionKey = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+	paddingKeys := []string{"s1", "s2", "s3", "s4"}
+	for i, paddingKey := range paddingKeys {
+		t.Run(fmt.Sprintf("S%d=11_is_rejected", i+1), func(t *testing.T) {
+			cfg := []string{
+				"s1", "12",
+				"s2", "12",
+				"s3", "12",
+				"s4", "12",
+				"header_protection_key", headerProtectionKey,
+			}
+			cfg[i*2+1] = "11"
+
+			if err := dev.IpcSet(uapiCfg(cfg...)); err == nil {
+				t.Errorf("%s=11 was accepted with header protection enabled", paddingKey)
+			}
+		})
+	}
+
+	t.Run("S1-S4=12_is_accepted", func(t *testing.T) {
+		err := dev.IpcSet(uapiCfg(
+			"s1", "12",
+			"s2", "12",
+			"s3", "12",
+			"s4", "12",
+			"header_protection_key", headerProtectionKey,
+		))
+		if err != nil {
+			t.Fatalf("S1-S4=12: unexpected error: %v", err)
+		}
 	})
 }
 

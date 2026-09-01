@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"sync"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
 )
@@ -86,14 +87,18 @@ type ChannelTUN struct {
 	closed chan struct{}
 	events chan tun.Event
 	tun    chTun
+
+	readStarted     chan struct{}
+	readStartedOnce sync.Once
 }
 
 func NewChannelTUN() *ChannelTUN {
 	c := &ChannelTUN{
-		Inbound:  make(chan []byte),
-		Outbound: make(chan []byte),
-		closed:   make(chan struct{}),
-		events:   make(chan tun.Event, 1),
+		Inbound:     make(chan []byte),
+		Outbound:    make(chan []byte),
+		closed:      make(chan struct{}),
+		events:      make(chan tun.Event, 1),
+		readStarted: make(chan struct{}),
 	}
 	c.tun.c = c
 	c.events <- tun.EventUp
@@ -104,6 +109,10 @@ func (c *ChannelTUN) TUN() tun.Device {
 	return &c.tun
 }
 
+func (c *ChannelTUN) ReadStarted() <-chan struct{} {
+	return c.readStarted
+}
+
 type chTun struct {
 	c *ChannelTUN
 }
@@ -111,6 +120,10 @@ type chTun struct {
 func (t *chTun) File() *os.File { return nil }
 
 func (t *chTun) Read(packets [][]byte, sizes []int, offset int) (int, error) {
+	t.c.readStartedOnce.Do(func() {
+		close(t.c.readStarted)
+	})
+
 	select {
 	case <-t.c.closed:
 		return 0, os.ErrClosed
