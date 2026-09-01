@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/net/ipv4"
@@ -39,6 +40,14 @@ type StdNetBind struct {
 	ipv4RxOffload bool
 	ipv6TxOffload bool
 	ipv6RxOffload bool
+
+	// batchUnsupported is set the first time WriteBatch/ReadBatch fails with
+	// ENOSYS — i.e. the kernel has no sendmmsg/recvmmsg (added in Linux 3.0).
+	// Some routers still run older kernels (e.g. Broadcom BCM470x on 2.6.36),
+	// where the batch syscalls return ENOSYS and the tunnel could not send or
+	// receive a single packet. Once set, Send/receiveIP use the per-packet
+	// WriteMsgUDP/ReadMsgUDP path (as the non-Linux branch already does).
+	batchUnsupported atomic.Bool
 
 	// these two fields are not guarded by mu
 	udpAddrPool sync.Pool
@@ -238,24 +247,25 @@ func (s *StdNetBind) receiveIP(
 	}
 	defer s.putMessages(msgs)
 	var numMsgs int
-	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+	if s.useBatch() {
 		if rxOffload {
 			readAt := len(*msgs) - (IdealBatchSize / udpSegmentMaxDatagrams)
 			numMsgs, err = br.ReadBatch((*msgs)[readAt:], 0)
-			if err != nil {
-				return 0, err
-			}
-			numMsgs, err = splitCoalescedMessages(*msgs, readAt, getGSOSize)
-			if err != nil {
-				return 0, err
+			if err == nil {
+				numMsgs, err = splitCoalescedMessages(*msgs, readAt, getGSOSize)
 			}
 		} else {
 			numMsgs, err = br.ReadBatch(*msgs, 0)
-			if err != nil {
-				return 0, err
-			}
 		}
-	} else {
+		if errors.Is(err, syscall.ENOSYS) {
+			// The kernel has no recvmmsg (pre-3.0); disable batching permanently
+			// and fall through to the per-packet read below.
+			s.batchUnsupported.Store(true)
+		} else if err != nil {
+			return 0, err
+		}
+	}
+	if !s.useBatch() {
 		msg := &(*msgs)[0]
 		msg.N, msg.NN, _, msg.Addr, err = conn.ReadMsgUDP(msg.Buffers[0], msg.OOB)
 		if err != nil {
@@ -409,13 +419,21 @@ retry:
 	return err
 }
 
+// useBatch reports whether the batched sendmmsg/recvmmsg path (via
+// ipv{4,6}.PacketConn) should be used. It is only available on Linux/Android, and
+// is disabled for the lifetime of the bind once the kernel is found to lack the
+// batch syscalls (ENOSYS, pre-Linux-3.0 — see batchUnsupported).
+func (s *StdNetBind) useBatch() bool {
+	return (runtime.GOOS == "linux" || runtime.GOOS == "android") && !s.batchUnsupported.Load()
+}
+
 func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message) error {
 	var (
 		n     int
 		err   error
 		start int
 	)
-	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+	if s.useBatch() {
 		for {
 			n, err = pc.WriteBatch(msgs[start:], 0)
 			if err != nil || n == len(msgs[start:]) {
@@ -423,12 +441,18 @@ func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message
 			}
 			start += n
 		}
-	} else {
-		for _, msg := range msgs {
-			_, _, err = conn.WriteMsgUDP(msg.Buffers[0], msg.OOB, msg.Addr.(*net.UDPAddr))
-			if err != nil {
-				break
-			}
+		if !errors.Is(err, syscall.ENOSYS) {
+			return err
+		}
+		// The kernel has no sendmmsg (pre-3.0). ENOSYS is returned on the first
+		// call, so no datagrams were sent; disable batching permanently and fall
+		// through to the per-packet path below.
+		s.batchUnsupported.Store(true)
+	}
+	for _, msg := range msgs {
+		_, _, err = conn.WriteMsgUDP(msg.Buffers[0], msg.OOB, msg.Addr.(*net.UDPAddr))
+		if err != nil {
+			break
 		}
 	}
 	return err
