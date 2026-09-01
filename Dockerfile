@@ -5,7 +5,7 @@ RUN go mod download && \
     go mod verify && \
     go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /usr/bin
 
-FROM alpine:3.19 as tools
+FROM alpine:3.24 as tools
 ARG AWGTOOLS_COMMIT="v3.1.20260812"
 
 RUN apk add --no-cache git build-base linux-headers && \
@@ -13,7 +13,7 @@ RUN apk add --no-cache git build-base linux-headers && \
     cd /amneziawg-tools && git checkout ${AWGTOOLS_COMMIT} && \
     cd src && make
 
-FROM alpine:3.19
+FROM alpine:3.24
 
 RUN apk --no-cache add iproute2 iptables bash
 COPY --from=tools /amneziawg-tools/src/wg /usr/bin/awg
