@@ -27,11 +27,16 @@ type obf interface {
 }
 
 type obfChain struct {
-	Spec string
-	obfs []obf
+	Spec          string
+	obfs          []obf
+	counterGetter func() uint32 // returns current packet counter value for <c> tag
 }
 
 func newObfChain(spec string) (*obfChain, error) {
+	return newObfChainWithCounter(spec, nil)
+}
+
+func newObfChainWithCounter(spec string, counterGetter func() uint32) (*obfChain, error) {
 	var (
 		obfs []obf
 		errs []error
@@ -59,19 +64,27 @@ func newObfChain(spec string) (*obfChain, error) {
 		}
 
 		key := parts[0]
-		builder, ok := obfBuilders[key]
-		if !ok {
-			errs = append(errs, fmt.Errorf("unknown tag <%s>", key))
-			remaining = remaining[end+1:]
-			continue
+
+		var o obf
+		var err error
+
+		// Counter tag requires counterGetter context and is not in obfBuilders
+		if key == "c" {
+			o, err = newCounterObf(counterGetter)
+		} else {
+			builder, ok := obfBuilders[key]
+			if !ok {
+				errs = append(errs, fmt.Errorf("unknown tag <%s>", key))
+				remaining = remaining[end+1:]
+				continue
+			}
+			val := ""
+			if len(parts) > 1 {
+				val = parts[1]
+			}
+			o, err = builder(val)
 		}
 
-		val := ""
-		if len(parts) > 1 {
-			val = parts[1]
-		}
-
-		o, err := builder(val)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to build <%s>: %w", key, err))
 			remaining = remaining[end+1:]
@@ -90,8 +103,9 @@ func newObfChain(spec string) (*obfChain, error) {
 	}
 
 	return &obfChain{
-		Spec: spec,
-		obfs: obfs,
+		Spec:          spec,
+		obfs:          obfs,
+		counterGetter: counterGetter,
 	}, nil
 }
 
