@@ -155,6 +155,7 @@ again:
 	var v4conn, v6conn *net.UDPConn
 	var v4pc *ipv4.PacketConn
 	var v6pc *ipv6.PacketConn
+	var v6port int
 
 	v4conn, port, err = listenNet("udp4", port)
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
@@ -162,7 +163,7 @@ again:
 	}
 
 	// Listen on the same port as we're using for ipv4.
-	v6conn, port, err = listenNet("udp6", port)
+	v6conn, v6port, err = listenNet("udp6", port)
 	if uport == 0 && errors.Is(err, syscall.EADDRINUSE) && tries < 100 {
 		v4conn.Close()
 		tries++
@@ -171,6 +172,9 @@ again:
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		v4conn.Close()
 		return nil, 0, err
+	}
+	if v6conn != nil {
+		port = v6port
 	}
 	var fns []ReceiveFunc
 	if v4conn != nil {
