@@ -27,9 +27,10 @@ const (
 )
 
 const (
-	ENV_WG_TUN_FD             = "WG_TUN_FD"
-	ENV_WG_UAPI_FD            = "WG_UAPI_FD"
-	ENV_WG_PROCESS_FOREGROUND = "WG_PROCESS_FOREGROUND"
+	ENV_WG_TUN_FD                        = "WG_TUN_FD"
+	ENV_WG_UAPI_FD                       = "WG_UAPI_FD"
+	ENV_WG_PROCESS_FOREGROUND            = "WG_PROCESS_FOREGROUND"
+	ENV_WG_PREALLOCATED_BUFFERS_PER_POOL = "WG_PREALLOCATED_BUFFERS_PER_POOL"
 )
 
 func printUsage() {
@@ -150,6 +151,19 @@ func main() {
 	if err != nil {
 		logger.Errorf("Failed to create TUN device: %v", err)
 		os.Exit(ExitSetupFailed)
+	}
+
+	// optionally bound the buffer pools (must happen before the device is
+	// created; the default is the platform profile in device/queueconstants_*.go)
+
+	if poolSizeStr := os.Getenv(ENV_WG_PREALLOCATED_BUFFERS_PER_POOL); poolSizeStr != "" {
+		poolSize, err := strconv.ParseUint(poolSizeStr, 10, 32)
+		if err != nil {
+			logger.Errorf("Invalid %s: %v", ENV_WG_PREALLOCATED_BUFFERS_PER_POOL, err)
+			os.Exit(ExitSetupFailed)
+		}
+		device.PreallocatedBuffersPerPool = uint32(poolSize)
+		logger.Verbosef("Buffer pools bounded at %d buffers each", poolSize)
 	}
 
 	// open UAPI file (or use supplied fd)
