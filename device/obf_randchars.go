@@ -2,14 +2,13 @@ package device
 
 import (
 	"crypto/rand"
-	"strconv"
 	"unicode"
 )
 
 const chars52 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 func newRandCharObf(val string) (obf, error) {
-	length, err := strconv.Atoi(val)
+	length, err := parseObfLen(val)
 	if err != nil {
 		return nil, err
 	}

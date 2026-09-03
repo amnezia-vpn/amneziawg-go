@@ -3,8 +3,20 @@ package device
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+func parseObfLen(val string) (int, error) {
+	length, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, err
+	}
+	if length < 0 {
+		return 0, fmt.Errorf("length must not be negative, got %d", length)
+	}
+	return length, nil
+}
 
 type obfBuilder func(val string) (obf, error)
 
