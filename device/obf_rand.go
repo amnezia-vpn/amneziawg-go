@@ -2,11 +2,10 @@ package device
 
 import (
 	"crypto/rand"
-	"strconv"
 )
 
 func newRandObf(val string) (obf, error) {
-	length, err := strconv.Atoi(val)
+	length, err := parseObfLen(val)
 	if err != nil {
 		return nil, err
 	}
