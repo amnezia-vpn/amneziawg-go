@@ -358,8 +358,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jc: %w", err)
 		}
 
-		device.log.Verbosef("UAPI: Updating junk count")
-		device.junk.count.Store(uint32(jc))
+		ipcDev.junk.count = uint32(jc)
 
 	case "jmin":
 		jmin, err := strconv.ParseUint(value, 10, 32)
@@ -367,8 +366,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmin: %w", err)
 		}
 
-		device.log.Verbosef("UAPI: Updating junk min")
-		device.junk.min.Store(uint32(jmin))
+		ipcDev.junk.min = uint32(jmin)
 
 	case "jmax":
 		jmax, err := strconv.ParseUint(value, 10, 32)
@@ -376,8 +374,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmax: %w", err)
 		}
 
-		device.log.Verbosef("UAPI: Updating junk max")
-		device.junk.max.Store(uint32(jmax))
+		ipcDev.junk.max = uint32(jmax)
 
 	case "s1":
 		padding, err := strconv.ParseUint(value, 10, 16)
@@ -801,6 +798,11 @@ type ipcSetDevice struct {
 		cookie    uint32
 		transport uint32
 	}
+	junk struct {
+		min   uint32
+		max   uint32
+		count uint32
+	}
 	headerProtectionKey HeaderCipherKey
 }
 
@@ -817,6 +819,10 @@ func (d *ipcSetDevice) fromDevice(device *Device) {
 	d.paddings.response = device.paddings.response.Load()
 	d.paddings.cookie = device.paddings.cookie.Load()
 	d.paddings.transport = device.paddings.transport.Load()
+
+	d.junk.min = device.junk.min.Load()
+	d.junk.max = device.junk.max.Load()
+	d.junk.count = device.junk.count.Load()
 
 	d.headerProtectionKey = device.headerProtection.key
 }
@@ -869,6 +875,19 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 
 	device.log.Verbosef("UAPI: Updating s4 padding")
 	device.paddings.transport.Store(d.paddings.transport)
+
+	if d.junk.min > d.junk.max {
+		return fmt.Errorf("jmin (%d) must not be greater than jmax (%d)", d.junk.min, d.junk.max)
+	}
+
+	device.log.Verbosef("UAPI: Updating junk min")
+	device.junk.min.Store(d.junk.min)
+
+	device.log.Verbosef("UAPI: Updating junk max")
+	device.junk.max.Store(d.junk.max)
+
+	device.log.Verbosef("UAPI: Updating junk count")
+	device.junk.count.Store(d.junk.count)
 
 	device.log.Verbosef("UAPI: Updating header protection key")
 	device.headerProtection.key = d.headerProtectionKey
