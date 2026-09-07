@@ -23,6 +23,7 @@ type Timer struct {
 	modifyingLock sync.RWMutex
 	runningLock   sync.Mutex
 	duration      time.Duration
+	isPending     bool
 }
 
 func (peer *Peer) NewTimer(expirationFunction func(*Peer, time.Duration)) *Timer {
@@ -32,13 +33,13 @@ func (peer *Peer) NewTimer(expirationFunction func(*Peer, time.Duration)) *Timer
 		defer timer.runningLock.Unlock()
 
 		timer.modifyingLock.Lock()
-		if timer.duration == 0 {
+		if !timer.isPending {
 			timer.modifyingLock.Unlock()
 			return
 		}
 		duration := timer.duration
+		timer.isPending = false
 		timer.modifyingLock.Unlock()
-		timer.duration = 0
 
 		expirationFunction(peer, duration)
 	})
@@ -49,13 +50,14 @@ func (peer *Peer) NewTimer(expirationFunction func(*Peer, time.Duration)) *Timer
 func (timer *Timer) Mod(d time.Duration) {
 	timer.modifyingLock.Lock()
 	timer.duration = d
+	timer.isPending = true
 	timer.Reset(d)
 	timer.modifyingLock.Unlock()
 }
 
 func (timer *Timer) Del() {
 	timer.modifyingLock.Lock()
-	timer.duration = 0
+	timer.isPending = false
 	timer.Stop()
 	timer.modifyingLock.Unlock()
 }
@@ -70,7 +72,7 @@ func (timer *Timer) DelSync() {
 func (timer *Timer) IsPending() bool {
 	timer.modifyingLock.RLock()
 	defer timer.modifyingLock.RUnlock()
-	return timer.duration > 0
+	return timer.isPending
 }
 
 func (peer *Peer) timersActive() bool {

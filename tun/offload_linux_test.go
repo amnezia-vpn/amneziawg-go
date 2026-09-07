@@ -750,3 +750,51 @@ func Test_udpPacketsCanCoalesce(t *testing.T) {
 		})
 	}
 }
+
+func Test_handleGRO_invalidItemCsumClearsVirtioNetHdr(t *testing.T) {
+	pkts := [][]byte{
+		flipTCP4Checksum(tcp4Packet(ip4PortA, ip4PortB, header.TCPFlagAck, 100, 1)),
+		tcp4Packet(ip4PortA, ip4PortB, header.TCPFlagAck, 100, 101),
+		tcp4Packet(ip4PortA, ip4PortB, header.TCPFlagAck, 100, 201),
+	}
+	// Poison the virtioNetHdr region of pkts[0] so a missing clear() is detectable.
+	for i := 0; i < virtioNetHdrLen; i++ {
+		pkts[0][i] = 0xAB
+	}
+
+	table := newTCPGROTable()
+	toWrite := make([]int, 0, len(pkts))
+	if err := handleGRO(pkts, virtioNetHdrLen, table, newUDPGROTable(), false, &toWrite); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify pkts[0] is in toWrite where we expect
+	if toWrite[0] != 0 {
+		t.Fatal("pkts[0] not found in toWrite at expected, zero index")
+	}
+
+	// Verify pkts[0] is not in tcpGROTable
+	if len(table.itemsByFlow) != 1 {
+		t.Fatalf("unexpected tcpGROTable items len: %d", len(table.itemsByFlow))
+	}
+	for _, v := range table.itemsByFlow {
+		if len(v) != 1 {
+			t.Fatalf("unexpected tcpGROItems slice len: %d", len(v))
+		}
+		item := v[0]
+		if item.sentSeq != 101 {
+			t.Fatalf("unexpected starting seq num in tcpGROTable: %d", item.sentSeq)
+		}
+		if item.numMerged != 1 {
+			t.Fatalf("unexpected numMerged in tcpGROTable: %d", item.numMerged)
+		}
+	}
+
+	// pkt 0 is in toWrite and not present in tcpGROTable, so its virtioNetHdr
+	// must have been cleared.
+	for i, b := range pkts[0][:virtioNetHdrLen] {
+		if b != 0 {
+			t.Fatalf("pkts[0] virtioNetHdr[%d] = 0x%x, want 0", i, b)
+		}
+	}
+}
