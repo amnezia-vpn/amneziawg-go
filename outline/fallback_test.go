@@ -1,3 +1,5 @@
+//go:build integration
+
 package outline_test
 
 import (
@@ -38,7 +40,9 @@ fallback:
 
 var testDomains = mobileproxy.NewListFromLines("example.com")
 
-func Test_outlineIntegration(t *testing.T) {
+// TestOutlineSmartDialerSmoke verifies SDK construction and proxy startup; the
+// SDK may satisfy connections through its proxyless strategy.
+func TestOutlineSmartDialerSmoke(t *testing.T) {
 	opts := mobileproxy.NewSmartDialerOptions(testDomains, cfg)
 	opts.SetLogWriter(mobileproxy.NewStderrLogWriter())
 	awg.RegisterFallbackParser(opts, "awg")
@@ -46,7 +50,9 @@ func Test_outlineIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = mobileproxy.RunProxy("", dialer); err != nil {
+	proxy, err := mobileproxy.RunProxy("127.0.0.1:0", dialer)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { proxy.Stop(1) })
 }
