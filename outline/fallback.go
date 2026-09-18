@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/goccy/go-yaml"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/mobileproxy"
@@ -16,27 +17,36 @@ import (
 )
 
 type DeviceConfig struct {
-	PrivateKey string       `yaml:"private_key"`
-	Address    []string     `yaml:"address"`
-	Dns        []string     `yaml:"dns"`
-	Mtu        int          `yaml:"mtu,omitempty"`
-	Jc         int          `yaml:"jc,omitempty"`
-	Jmin       int          `yaml:"jmin,omitempty"`
-	Jmax       int          `yaml:"jmax,omitempty"`
-	S1         int          `yaml:"s1,omitempty"`
-	S2         int          `yaml:"s2,omitempty"`
-	S3         int          `yaml:"s3,omitempty"`
-	S4         int          `yaml:"s4,omitempty"`
-	H1         string       `yaml:"h1,omitempty"`
-	H2         string       `yaml:"h2,omitempty"`
-	H3         string       `yaml:"h3,omitempty"`
-	H4         string       `yaml:"h4,omitempty"`
-	I1         string       `yaml:"i1,omitempty"`
-	I2         string       `yaml:"i2,omitempty"`
-	I3         string       `yaml:"i3,omitempty"`
-	I4         string       `yaml:"i4,omitempty"`
-	I5         string       `yaml:"i5,omitempty"`
-	Peers      []PeerConfig `yaml:"peers,omitempty"`
+	PrivateKey             string       `yaml:"private_key"`
+	Address                []string     `yaml:"address"`
+	Dns                    []string     `yaml:"dns"`
+	Mtu                    int          `yaml:"mtu,omitempty"`
+	Jc                     int          `yaml:"jc,omitempty"`
+	Jmin                   int          `yaml:"jmin,omitempty"`
+	Jmax                   int          `yaml:"jmax,omitempty"`
+	S1                     int          `yaml:"s1,omitempty"`
+	S2                     int          `yaml:"s2,omitempty"`
+	S3                     int          `yaml:"s3,omitempty"`
+	S4                     int          `yaml:"s4,omitempty"`
+	H1                     string       `yaml:"h1,omitempty"`
+	H2                     string       `yaml:"h2,omitempty"`
+	H3                     string       `yaml:"h3,omitempty"`
+	H4                     string       `yaml:"h4,omitempty"`
+	I1                     string       `yaml:"i1,omitempty"`
+	I2                     string       `yaml:"i2,omitempty"`
+	I3                     string       `yaml:"i3,omitempty"`
+	I4                     string       `yaml:"i4,omitempty"`
+	I5                     string       `yaml:"i5,omitempty"`
+	HeaderProtectionKey    string       `yaml:"header_protection_key,omitempty"`
+	ContentPaddingAddition string       `yaml:"content_padding_addition,omitempty"`
+	RekeyAfterTime         string       `yaml:"rekey_after_time,omitempty"`
+	RekeyTimeout           string       `yaml:"rekey_timeout,omitempty"`
+	RejectAfterTime        string       `yaml:"reject_after_time,omitempty"`
+	KeepaliveTimeout       string       `yaml:"keepalive_timeout,omitempty"`
+	MaxHandshakeAttempts   string       `yaml:"max_handshake_attempts,omitempty"`
+	RandomTrailers         string       `yaml:"random_trailers,omitempty"`
+	DisableCookies         string       `yaml:"disable_cookies,omitempty"`
+	Peers                  []PeerConfig `yaml:"peers,omitempty"`
 }
 
 type PeerConfig struct {
@@ -59,6 +69,28 @@ func mapYamlToConfig(y smart.YAMLNode) (*DeviceConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+func validateUint16Range(value string) error {
+	var parsed device.UintRange
+	if err := parsed.FromString(value); err != nil {
+		return err
+	}
+	if parsed.Hi() > 65535 {
+		return fmt.Errorf("range exceeds uint16")
+	}
+	return nil
+}
+
+func normalizeAWGBool(value string) (string, error) {
+	switch value {
+	case "on", "true", "1":
+		return "true", nil
+	case "off", "false", "0":
+		return "false", nil
+	default:
+		return "", fmt.Errorf("expected on/off, true/false, or 1/0")
+	}
 }
 
 func genIpcString(cfg *DeviceConfig) (string, error) {
@@ -135,6 +167,46 @@ func genIpcString(cfg *DeviceConfig) (string, error) {
 	if cfg.I5 != "" {
 		b.WriteString("\ni5=")
 		b.WriteString(cfg.I5)
+	}
+	if cfg.HeaderProtectionKey != "" {
+		key, err := base64.StdEncoding.DecodeString(cfg.HeaderProtectionKey)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode header protection key: %w", err)
+		}
+		if len(key) != 32 {
+			return "", fmt.Errorf("header protection key must contain 32 bytes")
+		}
+		b.WriteString("\nheader_protection_key=")
+		b.WriteString(hex.EncodeToString(key))
+	}
+	for _, field := range []struct{ name, value string }{
+		{name: "content_padding_addition", value: cfg.ContentPaddingAddition},
+		{name: "rekey_after_time", value: cfg.RekeyAfterTime},
+		{name: "rekey_timeout", value: cfg.RekeyTimeout},
+		{name: "reject_after_time", value: cfg.RejectAfterTime},
+		{name: "keepalive_timeout", value: cfg.KeepaliveTimeout},
+		{name: "max_handshake_attempts", value: cfg.MaxHandshakeAttempts},
+	} {
+		if field.value == "" {
+			continue
+		}
+		if err := validateUint16Range(field.value); err != nil {
+			return "", fmt.Errorf("invalid %s: %w", field.name, err)
+		}
+		b.WriteString("\n" + field.name + "=" + field.value)
+	}
+	for _, field := range []struct{ name, value string }{
+		{name: "random_trailers", value: cfg.RandomTrailers},
+		{name: "disable_cookies", value: cfg.DisableCookies},
+	} {
+		if field.value == "" {
+			continue
+		}
+		value, err := normalizeAWGBool(field.value)
+		if err != nil {
+			return "", fmt.Errorf("invalid %s: %w", field.name, err)
+		}
+		b.WriteString("\n" + field.name + "=" + value)
 	}
 
 	for _, peer := range cfg.Peers {
