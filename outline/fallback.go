@@ -146,15 +146,8 @@ func genIpcString(cfg *DeviceConfig) (string, error) {
 		b.WriteString(cfg.I5)
 	}
 	if cfg.HeaderProtectionKey != "" {
-		key, err := base64.StdEncoding.DecodeString(cfg.HeaderProtectionKey)
-		if err != nil {
-			return "", fmt.Errorf("failed to decode header protection key: %w", err)
-		}
-		if len(key) != 32 {
-			return "", fmt.Errorf("header protection key must contain 32 bytes")
-		}
 		b.WriteString("\nheader_protection_key=")
-		b.WriteString(hex.EncodeToString(key))
+		b.WriteString(cfg.HeaderProtectionKey)
 	}
 	if cfg.ContentPaddingAddition != "" {
 		b.WriteString("\ncontent_padding_addition=")
