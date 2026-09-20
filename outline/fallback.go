@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/goccy/go-yaml"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/mobileproxy"
@@ -69,28 +68,6 @@ func mapYamlToConfig(y smart.YAMLNode) (*DeviceConfig, error) {
 	}
 
 	return &cfg, nil
-}
-
-func validateUint16Range(value string) error {
-	var parsed device.UintRange
-	if err := parsed.FromString(value); err != nil {
-		return err
-	}
-	if parsed.Hi() > 65535 {
-		return fmt.Errorf("range exceeds uint16")
-	}
-	return nil
-}
-
-func normalizeAWGBool(value string) (string, error) {
-	switch value {
-	case "on", "true", "1":
-		return "true", nil
-	case "off", "false", "0":
-		return "false", nil
-	default:
-		return "", fmt.Errorf("expected on/off, true/false, or 1/0")
-	}
 }
 
 func genIpcString(cfg *DeviceConfig) (string, error) {
@@ -179,34 +156,37 @@ func genIpcString(cfg *DeviceConfig) (string, error) {
 		b.WriteString("\nheader_protection_key=")
 		b.WriteString(hex.EncodeToString(key))
 	}
-	for _, field := range []struct{ name, value string }{
-		{name: "content_padding_addition", value: cfg.ContentPaddingAddition},
-		{name: "rekey_after_time", value: cfg.RekeyAfterTime},
-		{name: "rekey_timeout", value: cfg.RekeyTimeout},
-		{name: "reject_after_time", value: cfg.RejectAfterTime},
-		{name: "keepalive_timeout", value: cfg.KeepaliveTimeout},
-		{name: "max_handshake_attempts", value: cfg.MaxHandshakeAttempts},
-	} {
-		if field.value == "" {
-			continue
-		}
-		if err := validateUint16Range(field.value); err != nil {
-			return "", fmt.Errorf("invalid %s: %w", field.name, err)
-		}
-		b.WriteString("\n" + field.name + "=" + field.value)
+	if cfg.ContentPaddingAddition != "" {
+		b.WriteString("\ncontent_padding_addition=")
+		b.WriteString(cfg.ContentPaddingAddition)
 	}
-	for _, field := range []struct{ name, value string }{
-		{name: "random_trailers", value: cfg.RandomTrailers},
-		{name: "disable_cookies", value: cfg.DisableCookies},
-	} {
-		if field.value == "" {
-			continue
-		}
-		value, err := normalizeAWGBool(field.value)
-		if err != nil {
-			return "", fmt.Errorf("invalid %s: %w", field.name, err)
-		}
-		b.WriteString("\n" + field.name + "=" + value)
+	if cfg.RekeyAfterTime != "" {
+		b.WriteString("\nrekey_after_time=")
+		b.WriteString(cfg.RekeyAfterTime)
+	}
+	if cfg.RekeyTimeout != "" {
+		b.WriteString("\nrekey_timeout=")
+		b.WriteString(cfg.RekeyTimeout)
+	}
+	if cfg.RejectAfterTime != "" {
+		b.WriteString("\nreject_after_time=")
+		b.WriteString(cfg.RejectAfterTime)
+	}
+	if cfg.KeepaliveTimeout != "" {
+		b.WriteString("\nkeepalive_timeout=")
+		b.WriteString(cfg.KeepaliveTimeout)
+	}
+	if cfg.MaxHandshakeAttempts != "" {
+		b.WriteString("\nmax_handshake_attempts=")
+		b.WriteString(cfg.MaxHandshakeAttempts)
+	}
+	if cfg.RandomTrailers != "" {
+		b.WriteString("\nrandom_trailers=")
+		b.WriteString(cfg.RandomTrailers)
+	}
+	if cfg.DisableCookies != "" {
+		b.WriteString("\ndisable_cookies=")
+		b.WriteString(cfg.DisableCookies)
 	}
 
 	for _, peer := range cfg.Peers {

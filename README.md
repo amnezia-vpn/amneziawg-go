@@ -53,8 +53,6 @@ $ make
 
 ## Configuration
 
-For the Outline SDK fallback format, see [Outline configuration](outline/README.md).
-
 ### Data types and definitions
 
 `client-side` means the param is not required to be the same on both server and client, while  
