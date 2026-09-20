@@ -16,27 +16,36 @@ import (
 )
 
 type DeviceConfig struct {
-	PrivateKey string       `yaml:"private_key"`
-	Address    []string     `yaml:"address"`
-	Dns        []string     `yaml:"dns"`
-	Mtu        int          `yaml:"mtu,omitempty"`
-	Jc         int          `yaml:"jc,omitempty"`
-	Jmin       int          `yaml:"jmin,omitempty"`
-	Jmax       int          `yaml:"jmax,omitempty"`
-	S1         int          `yaml:"s1,omitempty"`
-	S2         int          `yaml:"s2,omitempty"`
-	S3         int          `yaml:"s3,omitempty"`
-	S4         int          `yaml:"s4,omitempty"`
-	H1         string       `yaml:"h1,omitempty"`
-	H2         string       `yaml:"h2,omitempty"`
-	H3         string       `yaml:"h3,omitempty"`
-	H4         string       `yaml:"h4,omitempty"`
-	I1         string       `yaml:"i1,omitempty"`
-	I2         string       `yaml:"i2,omitempty"`
-	I3         string       `yaml:"i3,omitempty"`
-	I4         string       `yaml:"i4,omitempty"`
-	I5         string       `yaml:"i5,omitempty"`
-	Peers      []PeerConfig `yaml:"peers,omitempty"`
+	PrivateKey             string       `yaml:"private_key"`
+	Address                []string     `yaml:"address"`
+	Dns                    []string     `yaml:"dns"`
+	Mtu                    int          `yaml:"mtu,omitempty"`
+	Jc                     int          `yaml:"jc,omitempty"`
+	Jmin                   int          `yaml:"jmin,omitempty"`
+	Jmax                   int          `yaml:"jmax,omitempty"`
+	S1                     int          `yaml:"s1,omitempty"`
+	S2                     int          `yaml:"s2,omitempty"`
+	S3                     int          `yaml:"s3,omitempty"`
+	S4                     int          `yaml:"s4,omitempty"`
+	H1                     string       `yaml:"h1,omitempty"`
+	H2                     string       `yaml:"h2,omitempty"`
+	H3                     string       `yaml:"h3,omitempty"`
+	H4                     string       `yaml:"h4,omitempty"`
+	I1                     string       `yaml:"i1,omitempty"`
+	I2                     string       `yaml:"i2,omitempty"`
+	I3                     string       `yaml:"i3,omitempty"`
+	I4                     string       `yaml:"i4,omitempty"`
+	I5                     string       `yaml:"i5,omitempty"`
+	HeaderProtectionKey    string       `yaml:"header_protection_key,omitempty"`
+	ContentPaddingAddition string       `yaml:"content_padding_addition,omitempty"`
+	RekeyAfterTime         string       `yaml:"rekey_after_time,omitempty"`
+	RekeyTimeout           string       `yaml:"rekey_timeout,omitempty"`
+	RejectAfterTime        string       `yaml:"reject_after_time,omitempty"`
+	KeepaliveTimeout       string       `yaml:"keepalive_timeout,omitempty"`
+	MaxHandshakeAttempts   string       `yaml:"max_handshake_attempts,omitempty"`
+	RandomTrailers         string       `yaml:"random_trailers,omitempty"`
+	DisableCookies         string       `yaml:"disable_cookies,omitempty"`
+	Peers                  []PeerConfig `yaml:"peers,omitempty"`
 }
 
 type PeerConfig struct {
@@ -135,6 +144,42 @@ func genIpcString(cfg *DeviceConfig) (string, error) {
 	if cfg.I5 != "" {
 		b.WriteString("\ni5=")
 		b.WriteString(cfg.I5)
+	}
+	if cfg.HeaderProtectionKey != "" {
+		b.WriteString("\nheader_protection_key=")
+		b.WriteString(cfg.HeaderProtectionKey)
+	}
+	if cfg.ContentPaddingAddition != "" {
+		b.WriteString("\ncontent_padding_addition=")
+		b.WriteString(cfg.ContentPaddingAddition)
+	}
+	if cfg.RekeyAfterTime != "" {
+		b.WriteString("\nrekey_after_time=")
+		b.WriteString(cfg.RekeyAfterTime)
+	}
+	if cfg.RekeyTimeout != "" {
+		b.WriteString("\nrekey_timeout=")
+		b.WriteString(cfg.RekeyTimeout)
+	}
+	if cfg.RejectAfterTime != "" {
+		b.WriteString("\nreject_after_time=")
+		b.WriteString(cfg.RejectAfterTime)
+	}
+	if cfg.KeepaliveTimeout != "" {
+		b.WriteString("\nkeepalive_timeout=")
+		b.WriteString(cfg.KeepaliveTimeout)
+	}
+	if cfg.MaxHandshakeAttempts != "" {
+		b.WriteString("\nmax_handshake_attempts=")
+		b.WriteString(cfg.MaxHandshakeAttempts)
+	}
+	if cfg.RandomTrailers != "" {
+		b.WriteString("\nrandom_trailers=")
+		b.WriteString(cfg.RandomTrailers)
+	}
+	if cfg.DisableCookies != "" {
+		b.WriteString("\ndisable_cookies=")
+		b.WriteString(cfg.DisableCookies)
 	}
 
 	for _, peer := range cfg.Peers {

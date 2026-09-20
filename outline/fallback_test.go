@@ -46,7 +46,7 @@ func Test_outlineIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = mobileproxy.RunProxy("", dialer); err != nil {
+	if _, err = mobileproxy.RunProxy("127.0.0.1:0", dialer); err != nil {
 		t.Fatal(err)
 	}
 }
