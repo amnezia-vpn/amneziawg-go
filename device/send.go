@@ -349,8 +349,9 @@ func (device *Device) RoutineReadFromTUN() {
 			// is false off Android, so this branch and the call compile away
 			// there; on Android with no filter installed it is one atomic load.
 			// Dropping here mirrors the peer==nil path below: the element is
-			// reused for the next read.
-			if uidfilter.Supported && !uidfilter.AllowOutboundPacket(elem.packet) {
+			// reused for the next read. A packet of a flow not yet judged is
+			// copied and held, and sent later through ReleaseOutboundPacket.
+			if uidfilter.Supported && !uidfilter.AllowOutboundPacket(elem.packet, device) {
 				continue
 			}
 
