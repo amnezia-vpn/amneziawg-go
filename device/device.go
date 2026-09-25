@@ -15,6 +15,7 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/v3/ratelimiter"
 	"github.com/amnezia-vpn/amneziawg-go/v3/rwcancel"
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+	"github.com/amnezia-vpn/amneziawg-go/v3/uidfilter"
 )
 
 type Device struct {
@@ -84,6 +85,9 @@ type Device struct {
 	tun struct {
 		device tun.Device
 		mtu    atomic.Int32
+		// uidGate is the Strict Split Tunneling state of the packets read
+		// from device; see RoutineReadFromTUN.
+		uidGate uidfilter.Gate
 	}
 
 	ipcMutex sync.RWMutex
