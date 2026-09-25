@@ -9,17 +9,21 @@
 // lives outside this package and is injected via Set as a PacketFilter — on
 // Android it bridges through JNI to ConnectivityManager.getConnectionOwnerUid.
 // Because this datapath is packet-based (the filter would otherwise be consulted
-// for every packet), a TCP flow is judged only on packets that open a connection
-// (SYN set), and decisions are cached per flow (the full 5-tuple) so the
-// expensive cross-language call happens at most once per new flow.
+// for every packet), a TCP connection is judged on its SYN alone, every SYN
+// afresh, and a UDP flow's verdict is cached per 5-tuple for a few seconds, so
+// the expensive cross-language call happens about once per new flow.
 //
 // That call is slow — a binder call with a netlink socket-table walk behind it
 // — so it never runs on the goroutine that reads the tun device. A packet of a
-// flow not yet judged is copied and held, a few per flow, while a small pool of
-// workers asks the filter; the verdict then sends or drops what was held. No
-// packet of a flow leaves before its verdict, and flows already judged do not
-// wait for the ones being judged. While too many flows wait, packets of new
-// ones are dropped rather than held.
+// flow not yet judged is copied and held, within limits on packets, bytes and
+// time, while a small pool of workers asks the filter; the verdict then sends
+// or drops what was held. No packet of a flow leaves before its verdict, and
+// flows already judged do not wait for the ones being judged. While too many
+// flows wait, packets of new ones are dropped rather than held.
+//
+// The platform can only name the owner of a socket that still exists. A
+// datagram sent from a socket closed right after sending may be judged too
+// late, and is then dropped like one of an unknown owner.
 //
 // While a filter is installed, packets whose owner cannot be resolved are
 // dropped: anything but TCP and UDP, IP fragments, and IPv6 packets with
@@ -27,9 +31,9 @@
 // socket bound to the tun device, and the platform resolves owners for TCP and
 // UDP only, so passing such packets would reopen the bypass.
 //
-// When no filter is installed (the default), AllowOutboundPacket returns true
-// after a single atomic load, and Supported is false off Android, so callers can
-// drop the branch at compile time and the legacy path costs nothing.
+// When no filter is installed (the default), Gate.AllowOutboundPacket returns
+// true after a single atomic load, and Supported is false off Android, so
+// callers can drop the branch at compile time and the legacy path costs nothing.
 package uidfilter
 
 import (
@@ -55,34 +59,43 @@ type Releaser interface {
 	ReleaseOutboundPacket(packet []byte)
 }
 
-// holder is everything that belongs to one installed filter, so that Set swaps
-// the filter, its cache and its pending flows in one step.
+// holder is one installed filter with the workers that call it. Set replaces
+// it as a whole, and a Gate starts afresh when it sees a new one, so nothing
+// decided under one filter is used under the next.
 type holder struct {
 	f     PacketFilter
-	cache *decisionCache // owned by the tun-read goroutine, not guarded
+	start time.Time    // when the filter was installed
+	now   atomic.Int64 // a coarse monotonic clock: nanoseconds since start
 
-	mu      sync.Mutex
-	pending map[flowKey]*pendingFlow
-	waiting int       // pending flows without a verdict yet
-	decided []flowKey // pending flows with a verdict, not yet moved to the cache
-
-	jobs chan flowKey
+	jobs chan job
 	done chan struct{} // closed when Set replaces this holder
+
+	// release is held for reading while a verdict's packets are sent, and for
+	// writing while the holder is retired, so no packet leaves on a verdict of
+	// a filter that Set has already replaced.
+	release sync.RWMutex
+}
+
+type job struct {
+	s   *flowState
+	key flowKey
 }
 
 var current atomic.Pointer[holder]
 
 // Set installs f as the active filter, or removes it when f is nil (restoring
-// legacy allow-all). The new filter starts with an empty cache and nothing
-// pending; packets still held for the old one are dropped. Safe to call from
-// any goroutine.
+// legacy allow-all). The new filter starts with empty caches and nothing
+// pending. Packets still held for the old one are dropped: once Set returns, no
+// packet leaves on the old filter's verdict. Safe to call from any goroutine.
 func Set(f PacketFilter) {
 	var h *holder
 	if f != nil {
 		h = newHolder(f)
 	}
 	if old := current.Swap(h); old != nil {
+		old.release.Lock()
 		close(old.done)
+		old.release.Unlock()
 	}
 }
 
@@ -92,6 +105,14 @@ func Get() PacketFilter {
 		return h.f
 	}
 	return nil
+}
+
+// Gate is the filter state of one tun reader: its verdict cache and its flows
+// waiting for a verdict. The zero value is ready to use. It belongs to the
+// goroutine that reads the tun device, so each device has its own.
+type Gate struct {
+	h *holder    // the filter s was made for
+	s *flowState // nil until a filter is first seen
 }
 
 // AllowOutboundPacket parses the 5-tuple from an outbound IP packet and returns
@@ -104,15 +125,16 @@ func Get() PacketFilter {
 // TCP packets without SYN are passed through: a connection whose SYN was denied
 // never becomes established, so any later packet belongs to an allowed one.
 // Judging those again would misread closing sockets, which the kernel
-// re-attributes to UID 0 once the app has closed them. Other packets are judged
-// once per flow (protocol and both endpoints), and the verdict is cached.
-//
-// It is written for the single goroutine that reads the tun device, and the
-// decision cache assumes that; Set may be called from anywhere.
-func AllowOutboundPacket(packet []byte, r Releaser) bool {
+// re-attributes to UID 0 once the app has closed them. Every SYN is judged,
+// even on a 5-tuple judged before, since a new socket may have taken it over.
+// UDP verdicts are cached per 5-tuple for cacheTTL.
+func (g *Gate) AllowOutboundPacket(packet []byte, r Releaser) bool {
 	h := current.Load()
 	if h == nil {
 		return true
+	}
+	if g.h != h {
+		g.h, g.s = h, newFlowState()
 	}
 
 	proto, src, srcPort, dst, dstPort, ok := parse5Tuple(packet)
@@ -129,10 +151,13 @@ func AllowOutboundPacket(packet []byte, r Releaser) bool {
 	copy(key.srcIP[:], src)
 	copy(key.dstIP[:], dst)
 
-	if allow, found := h.cache.get(key); found {
-		return allow
+	now := h.now.Load()
+	if proto == ipProtoUDP {
+		if allow, found := g.s.cache.get(key, now); found {
+			return allow
+		}
 	}
-	return h.hold(key, packet, r)
+	return g.s.hold(h, key, packet, r, now)
 }
 
 const (
@@ -227,76 +252,145 @@ const (
 	// does) attaches this many threads and no more.
 	workers = 4
 
-	// maxPendingFlows bounds the flows waiting for a verdict. Past it, packets
-	// of new flows are dropped, not held: the filter is falling behind, and
-	// holding more would only grow memory. Flows already judged are unaffected.
+	// maxPendingFlows bounds the flows of one Gate waiting for a verdict. Past
+	// it, packets of new flows are dropped, not held: the filter is falling
+	// behind, and holding more would only grow memory. Flows already judged are
+	// unaffected.
 	maxPendingFlows = 256
 
 	// maxHeldPerFlow is how many packets of one flow are held until its verdict:
 	// enough for a SYN and its retransmit, or a DNS query and its retry.
 	maxHeldPerFlow = 4
+
+	// maxHeldBytes bounds the memory held by one Gate.
+	maxHeldBytes = 1 << 20
+
+	// maxHoldTime is how old a held packet may be when its verdict arrives and
+	// still be sent. An older one is dropped: the sender has retried or given
+	// up by then. It is measured on the coarse clock, so up to clockInterval
+	// longer.
+	maxHoldTime = 2 * time.Second
+
+	// clockInterval is how often the coarse clock advances. The cache and the
+	// hold limit read it instead of time.Now(), which costs more than a cache
+	// lookup; it is advanced by a timer rather than by lookups so that it stays
+	// right across an idle tunnel.
+	clockInterval = time.Second
 )
 
+// flowState is what one Gate keeps for one filter. The cache belongs to the
+// tun-read goroutine; the rest is shared with the workers, under mu.
+type flowState struct {
+	cache decisionCache
+
+	mu        sync.Mutex
+	pending   map[flowKey]*pendingFlow
+	waiting   int       // pending flows without a verdict yet
+	heldBytes int       // bytes of the packets held
+	decided   []flowKey // pending flows with a verdict, not yet collected
+}
+
 type pendingFlow struct {
-	held    [][]byte // copies, in the order they were read
+	held    []heldPacket // in the order they were read
 	r       Releaser
 	decided bool
 	allow   bool
 }
 
+type heldPacket struct {
+	data []byte // a copy: the reader reuses its buffers
+	at   int64  // the coarse clock when it was read
+}
+
 func newHolder(f PacketFilter) *holder {
 	h := &holder{
-		f:       f,
-		cache:   newDecisionCache(),
-		pending: make(map[flowKey]*pendingFlow),
-		jobs:    make(chan flowKey, maxPendingFlows),
-		done:    make(chan struct{}),
+		f:     f,
+		start: time.Now(),
+		jobs:  make(chan job, maxPendingFlows),
+		done:  make(chan struct{}),
 	}
+	go h.tick()
 	for i := 0; i < workers; i++ {
 		go h.work()
 	}
 	return h
 }
 
+func newFlowState() *flowState {
+	return &flowState{
+		cache:   decisionCache{m: make(map[flowKey]cacheEntry)},
+		pending: make(map[flowKey]*pendingFlow),
+	}
+}
+
+// tick advances the coarse clock until the holder is replaced. The clock only
+// moves forward.
+func (h *holder) tick() {
+	t := time.NewTicker(clockInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-h.done:
+			return
+		case now := <-t.C:
+			if since := int64(now.Sub(h.start)); since > h.now.Load() {
+				h.now.Store(since)
+			}
+		}
+	}
+}
+
 // hold handles a packet whose flow has no cached verdict. It runs on the
 // tun-read goroutine and returns the packet's verdict if the flow has one by
 // now, and false if the packet was held or dropped.
-func (h *holder) hold(key flowKey, packet []byte, r Releaser) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	defer h.collectDecided()
+func (s *flowState) hold(h *holder, key flowKey, packet []byte, r Releaser, now int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer s.collectDecided(now)
 
-	if pf, ok := h.pending[key]; ok {
-		if pf.decided {
-			delete(h.pending, key)
-			h.cache.put(key, pf.allow)
+	if pf, ok := s.pending[key]; ok {
+		if !pf.decided {
+			if len(pf.held) < maxHeldPerFlow && s.heldBytes+len(packet) <= maxHeldBytes {
+				pf.held = append(pf.held, heldPacket{append([]byte(nil), packet...), now})
+				s.heldBytes += len(packet)
+			}
+			return false
+		}
+		delete(s.pending, key)
+		if key.proto != ipProtoTCP {
+			s.cache.put(key, pf.allow, now)
 			return pf.allow
 		}
-		if len(pf.held) < maxHeldPerFlow {
-			pf.held = append(pf.held, append([]byte(nil), packet...))
-		}
-		return false
+		// A SYN is judged afresh: this may be a new connection on the same 5-tuple.
 	}
-	if h.waiting >= maxPendingFlows {
+	if s.waiting >= maxPendingFlows || s.heldBytes+len(packet) > maxHeldBytes {
 		return false // not cached: the flow is judged once there is room
 	}
-	h.pending[key] = &pendingFlow{held: [][]byte{append([]byte(nil), packet...)}, r: r}
-	h.waiting++
-	h.jobs <- key // never blocks: the channel holds maxPendingFlows keys
+	select {
+	case h.jobs <- job{s, key}:
+	default:
+		return false // other Gates keep the workers busy
+	}
+	s.pending[key] = &pendingFlow{held: []heldPacket{{append([]byte(nil), packet...), now}}, r: r}
+	s.waiting++
+	s.heldBytes += len(packet)
 	return false
 }
 
-// collectDecided moves the verdicts the workers have reached into the cache, so
-// that a flow which sent nothing after its first packet does not stay in
-// pending. Called with h.mu held, on the tun-read goroutine.
-func (h *holder) collectDecided() {
-	for _, key := range h.decided {
-		if pf, ok := h.pending[key]; ok && pf.decided {
-			delete(h.pending, key)
-			h.cache.put(key, pf.allow)
+// collectDecided moves the verdicts the workers have reached into the cache,
+// so that a flow which sent nothing after its first packet does not stay in
+// pending. TCP verdicts are not cached. Called with s.mu held, on the tun-read
+// goroutine.
+func (s *flowState) collectDecided(now int64) {
+	for _, key := range s.decided {
+		if pf, ok := s.pending[key]; ok && pf.decided {
+			delete(s.pending, key)
+			if key.proto != ipProtoTCP {
+				s.cache.put(key, pf.allow, now)
+			}
 		}
 	}
-	h.decided = h.decided[:0]
+	s.decided = s.decided[:0]
 }
 
 // work asks the filter about pending flows, one at a time, until Set replaces
@@ -307,8 +401,8 @@ func (h *holder) work() {
 		select {
 		case <-h.done:
 			return
-		case key := <-h.jobs:
-			h.judge(key)
+		case j := <-h.jobs:
+			h.judge(j.s, j.key)
 		}
 	}
 }
@@ -317,35 +411,50 @@ func (h *holder) work() {
 // for it. Packets that arrive while earlier ones are being sent are held too
 // and sent in the next round, so the flow keeps its order: the tun-read
 // goroutine sees the verdict only once nothing is held.
-func (h *holder) judge(key flowKey) {
+func (h *holder) judge(s *flowState, key flowKey) {
 	srcIP, dstIP := net.IP(key.srcIP[:key.ipLen]).String(), net.IP(key.dstIP[:key.ipLen]).String()
 	allow := h.f.Allow(networkName(key.proto), srcIP, int(key.srcPort), dstIP, int(key.dstPort))
 
 	for {
-		h.mu.Lock()
-		pf := h.pending[key]
+		s.mu.Lock()
+		pf := s.pending[key]
 		held := pf.held
 		pf.held = nil
+		for _, p := range held {
+			s.heldBytes -= len(p.data)
+		}
 		if len(held) == 0 {
 			pf.decided, pf.allow = true, allow
-			h.waiting--
-			h.decided = append(h.decided, key)
-			h.mu.Unlock()
+			s.waiting--
+			s.decided = append(s.decided, key)
+			s.mu.Unlock()
 			return
 		}
-		h.mu.Unlock()
+		s.mu.Unlock()
 
-		select {
-		case <-h.done:
-			return // replaced: what was held for the old filter is dropped
-		default:
-		}
-		if allow {
-			for _, p := range held {
-				pf.r.ReleaseOutboundPacket(p)
-			}
+		if allow && !h.send(pf.r, held) {
+			return
 		}
 	}
+}
+
+// send hands held packets to r, dropping those held too long. It returns false,
+// sending nothing, if the holder has been replaced.
+func (h *holder) send(r Releaser, held []heldPacket) bool {
+	h.release.RLock()
+	defer h.release.RUnlock()
+	select {
+	case <-h.done:
+		return false
+	default:
+	}
+	now := h.now.Load()
+	for _, p := range held {
+		if now-p.at <= maxHoldTime.Nanoseconds() {
+			r.ReleaseOutboundPacket(p.data)
+		}
+	}
+	return true
 }
 
 // --- per-flow decision cache ---
@@ -353,12 +462,6 @@ func (h *holder) judge(key flowKey) {
 const (
 	cacheTTL        = 10 * time.Second
 	cacheMaxEntries = 4096
-
-	// The clock is read once per this many lookups instead of on every packet:
-	// time.Now() costs more than the lookup it guards. Between reads an entry can
-	// outlive its TTL by the time those lookups take, which is microseconds under
-	// the load where it matters. A miss reads the clock anyway.
-	clockEvery = 64
 )
 
 // flowKey is the full 5-tuple. A key without the destination would outlive the
@@ -374,50 +477,29 @@ type flowKey struct {
 }
 
 type cacheEntry struct {
-	expiresAt int64 // unix nanos
+	expiresAt int64 // on the holder's coarse clock
 	allow     bool
 }
 
 // decisionCache belongs to the goroutine that reads the tun device: it is not
-// guarded, and each holder has its own.
+// guarded. Times come from the holder's coarse clock.
 type decisionCache struct {
-	m       map[flowKey]cacheEntry
-	now     int64 // the clock as last read
-	lookups uint32
+	m map[flowKey]cacheEntry
 }
 
-func newDecisionCache() *decisionCache {
-	return &decisionCache{m: make(map[flowKey]cacheEntry), now: time.Now().UnixNano()}
-}
-
-func (c *decisionCache) tick() int64 {
-	c.lookups++
-	if c.lookups%clockEvery == 0 {
-		c.now = time.Now().UnixNano()
-	}
-	return c.now
-}
-
-func (c *decisionCache) get(k flowKey) (allow, found bool) {
+func (c *decisionCache) get(k flowKey, now int64) (allow, found bool) {
 	e, ok := c.m[k]
 	if !ok {
 		return false, false
 	}
-	if e.expiresAt > c.tick() {
-		return e.allow, true
-	}
-	// Possibly stale only because the clock is, so read it before dropping.
-	c.now = time.Now().UnixNano()
-	if e.expiresAt > c.now {
+	if e.expiresAt > now {
 		return e.allow, true
 	}
 	delete(c.m, k)
 	return false, false
 }
 
-func (c *decisionCache) put(k flowKey, allow bool) {
-	now := time.Now().UnixNano()
-	c.now = now
+func (c *decisionCache) put(k flowKey, allow bool, now int64) {
 	if len(c.m) >= cacheMaxEntries {
 		for kk, ee := range c.m {
 			if ee.expiresAt <= now {

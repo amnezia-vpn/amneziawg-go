@@ -351,7 +351,7 @@ func (device *Device) RoutineReadFromTUN() {
 			// Dropping here mirrors the peer==nil path below: the element is
 			// reused for the next read. A packet of a flow not yet judged is
 			// copied and held, and sent later through ReleaseOutboundPacket.
-			if uidfilter.Supported && !uidfilter.AllowOutboundPacket(elem.packet, device) {
+			if uidfilter.Supported && !device.tun.uidGate.AllowOutboundPacket(elem.packet, device) {
 				continue
 			}
 
