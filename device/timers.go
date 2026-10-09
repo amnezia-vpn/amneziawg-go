@@ -37,8 +37,8 @@ func (peer *Peer) NewTimer(expirationFunction func(*Peer, time.Duration)) *Timer
 			return
 		}
 		duration := timer.duration
-		timer.modifyingLock.Unlock()
 		timer.duration = 0
+		timer.modifyingLock.Unlock()
 
 		expirationFunction(peer, duration)
 	})
