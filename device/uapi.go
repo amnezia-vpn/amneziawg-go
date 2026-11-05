@@ -156,8 +156,8 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("h4=%s", header.ToString())
 		}
 
-		for i, ipacket := range device.ipackets {
-			if ipacket != nil {
+		for i := range device.ipackets {
+			if ipacket := device.ipackets[i].Load(); ipacket != nil {
 				sendf("i%d=%s", i+1, ipacket.Spec)
 			}
 		}
@@ -440,35 +440,35 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I1: %w", err)
 		}
-		device.ipackets[0] = chain
+		device.ipackets[0].Store(chain)
 
 	case "i2":
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I2: %w", err)
 		}
-		device.ipackets[1] = chain
+		device.ipackets[1].Store(chain)
 
 	case "i3":
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I3: %w", err)
 		}
-		device.ipackets[2] = chain
+		device.ipackets[2].Store(chain)
 
 	case "i4":
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I4: %w", err)
 		}
-		device.ipackets[3] = chain
+		device.ipackets[3].Store(chain)
 
 	case "i5":
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
 		}
-		device.ipackets[4] = chain
+		device.ipackets[4].Store(chain)
 
 	case "header_protection_key":
 		var key HeaderCipherKey
