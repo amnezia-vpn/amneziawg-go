@@ -110,7 +110,7 @@ type Device struct {
 		transport atomic.Uint32
 	}
 
-	ipackets [5]*obfChain
+	ipackets [5]atomic.Pointer[obfChain]
 
 	headerProtection struct {
 		sync.RWMutex

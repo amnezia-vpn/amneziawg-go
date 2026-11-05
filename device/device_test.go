@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -575,5 +576,50 @@ func TestBatchSize(t *testing.T) {
 	d.tun.device = &fakeTUNDeviceSized{128}
 	if want, got := 128, d.BatchSize(); got != want {
 		t.Errorf("expected batch size %d, got %d", want, got)
+	}
+}
+
+// TestSignaturePacketsChangeDuringHandshake changes I1 while the peer keeps
+// sending handshake initiations, which read I1-I5. Run with -race.
+func TestSignaturePacketsChangeDuringHandshake(t *testing.T) {
+	pair := genTestPair(t, false)
+	dev := pair[0].dev
+	var peer *Peer
+	dev.peers.RLock()
+	for _, p := range dev.peers.keyMap {
+		peer = p
+	}
+	dev.peers.RUnlock()
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			peer.handshake.mutex.Lock()
+			peer.handshake.lastSentHandshake = time.Time{}
+			peer.handshake.mutex.Unlock()
+			peer.SendHandshakeInitiation(false)
+		}
+	}()
+
+	for _, spec := range []string{"<r 16>", "<b 0xabcd>", "<r 32>", ""} {
+		if err := dev.IpcSet(uapiCfg("i1", spec)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(done)
+	wg.Wait()
+
+	if cfg, err := dev.IpcGet(); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(cfg, "i1=") {
+		t.Fatalf("i1 not cleared:\n%s", cfg)
 	}
 }
