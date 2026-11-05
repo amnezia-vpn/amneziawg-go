@@ -853,7 +853,7 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 		paddings := []uint32{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
 		for i, padding := range paddings {
 			if padding < HeaderCipherNonceSize {
-				return fmt.Errorf("S%d must be more then %d to use headerProtection", i, HeaderCipherNonceSize)
+				return fmt.Errorf("S%d must be at least %d to use header protection, got %d", i+1, HeaderCipherNonceSize, padding)
 			}
 		}
 	}
