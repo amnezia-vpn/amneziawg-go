@@ -365,14 +365,18 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint) error {
 	defer s.putMessages(msgs)
 	ua := s.udpAddrPool.Get().(*net.UDPAddr)
 	defer s.udpAddrPool.Put(ua)
+	// ua comes from a pool and may have been resliced by an earlier Send of
+	// the other address family: restore the length before copying, otherwise
+	// copy() writes only len(ua.IP) bytes and an IPv6 destination is truncated
+	// to its first 4 bytes after an IPv4 send.
 	if is6 {
+		ua.IP = ua.IP[:16]
 		as16 := endpoint.DstIP().As16()
 		copy(ua.IP, as16[:])
-		ua.IP = ua.IP[:16]
 	} else {
+		ua.IP = ua.IP[:4]
 		as4 := endpoint.DstIP().As4()
 		copy(ua.IP, as4[:])
-		ua.IP = ua.IP[:4]
 	}
 	ua.Port = int(endpoint.(*StdNetEndpoint).Port())
 	var (
