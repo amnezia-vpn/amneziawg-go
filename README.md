@@ -65,6 +65,33 @@ $ make
 > [!NOTE]
 > If there is no value specified (for any param), AWG treats it as 0
 
+### Random trailers [AWG 3.1+]
+
+Appends a random amount of bytes to the end of each packet. For handshake packets the trailer is random data placed after the message, so the receiving side must have `RandomTrailers` enabled to accept it: set it on both sides. For transport packets the trailer is zeroes inside the encrypted payload.
+
+```
+[Device]
++ RandomTrailers: bool - server-side # enables random trailers on packets
+```
+
+> [!TIP]
+> Because packet sizes become random, use the same values for `S1`-`S4` to reduce the risk of misdetecting the packet type.
+
+> [!NOTE]
+> If `ContentPaddingAddition` is set, it takes priority for transport packets: random trailers are then added only to handshake packets.
+
+### Disable cookies [AWG 3.1+]
+
+Prohibits the interface from sending cookie replies. WireGuard's cookie reply behavior can be used as an additional fingerprint during active probing.
+
+```
+[Device]
++ DisableCookies: bool - client-side # disables cookie replies and the under-load protection
+```
+
+> [!WARNING]
+> With `DisableCookies` on, the node skips the whole under-load logic (MAC2 check, cookie replies and handshake rate limiting). This makes it less recognizable to active probing, but also removes protection against handshake flooding.
+
 ### Header protection [AWG 3+]
 
 Header protection is the mechanism of protecting low-entropy values of packets' headers. The idea is to apply fast encryption to the specific fields which WireGuard does use for authentication and its own encryption. The cipher uses `S1-S4` crypto padding as nonce for each incoming packet.
