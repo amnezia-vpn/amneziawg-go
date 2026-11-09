@@ -629,17 +629,52 @@ func (device *Device) RoutineEncryption(id int) {
 				nil,
 			)
 
-			cip, err := device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
-			if err != nil {
+			if err := device.protectTransportHeader(elem.packet, crypt, header); err != nil {
 				device.log.Errorf("Routing: header obfuscation failed - packet dropped")
 				elem.packet = nil
 				continue
 			}
-			if cip != nil {
-				cip.XORKeyStream(header, header)
-			}
 		}
 		elemsContainer.Unlock()
+	}
+}
+
+// transportHeaderDraws bounds how many times protectTransportHeader draws the
+// random bytes of one transport packet.
+const transportHeaderDraws = 16
+
+// protectTransportHeader applies header protection to header, the type,
+// receiver and counter of the transport message in datagram, which follows the
+// S4 random bytes crypt. A receiver classifies a packet with
+// DeterminePacketTypeAndPadding, which tries the handshake header ranges first
+// and takes the first that matches, so it would drop this packet if its bytes
+// at a handshake message's offset fell in that message's range. In that case
+// crypt and the type value are drawn again. With header protection crypt is
+// the nonce of the header cipher, so a new draw changes every value the
+// receiver compares and is misread only with the odds of the first. Without
+// it only crypt and the type change; after transportHeaderDraws draws the
+// packet goes as it is.
+func (device *Device) protectTransportHeader(datagram, crypt, header []byte) error {
+	var plain [MessageTransportHeaderSize]byte
+	copy(plain[:], header)
+	for draw := 1; ; draw++ {
+		cip, err := device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
+		if err != nil {
+			return err
+		}
+		var mask [MessageTransportHeaderSize]byte
+		if cip != nil {
+			cip.XORKeyStream(mask[:], mask[:])
+		}
+		applyHash(header, plain[:], mask[:])
+		if draw == transportHeaderDraws {
+			return nil
+		}
+		if _, msgType, _ := device.DeterminePacketTypeAndPadding(datagram, mask[:4]); msgType == MessageTransportType {
+			return nil
+		}
+		rand.Read(crypt)
+		binary.LittleEndian.PutUint32(plain[:4], device.headers.transport.Load().PickOne())
 	}
 }
 

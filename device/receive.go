@@ -154,7 +154,7 @@ func (device *Device) RoutineReceiveIncoming(
 			}
 
 			// get message padding and type based on information from S1-S4 and H1-H4
-			msgSize, msgType, padding := device.DeterminePacketTypeAndPadding(packet, typeHash)
+			msgSize, msgType, padding := device.determinePacketTypeAndPadding(packet, typeHash)
 
 			packet = packet[padding:]
 			if msgType != MessageTransportType {
@@ -656,4 +656,48 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 	}
 
 	return 0, MessageUnknownType, 0
+}
+
+// determinePacketTypeAndPadding classifies a packet from the network with
+// DeterminePacketTypeAndPadding, which tries the handshake header ranges before
+// the transport range and takes the first that matches. With RandomTrailers a
+// handshake range is tried on every packet longer than that message, so a
+// transport packet whose bytes at a handshake message's offset fall in that
+// message's range is taken for that message and dropped. A packet that also
+// reads as transport and names one of this device's keypairs is a transport
+// packet: a handshake message names one only by chance, once in 2^32 per
+// keypair.
+func (device *Device) determinePacketTypeAndPadding(packet []byte, typeHash []byte) (int, uint32, uint32) {
+	msgSize, msgType, padding := device.DeterminePacketTypeAndPadding(packet, typeHash)
+	if msgType == MessageTransportType || msgType == MessageUnknownType {
+		return msgSize, msgType, padding
+	}
+
+	transportPadding := device.paddings.transport.Load()
+	start := int(transportPadding)
+	if len(packet) < start+MessageTransportSize {
+		return msgSize, msgType, padding
+	}
+	header := packet[start : start+MessageTransportHeaderSize]
+
+	var field [4]byte
+	applyHash(field[:], header[:4], typeHash)
+	if !device.headers.transport.Load().Contains(binary.LittleEndian.Uint32(field[:])) {
+		return msgSize, msgType, padding
+	}
+
+	copy(field[:], header[MessageTransportOffsetReceiver:MessageTransportOffsetCounter])
+	cip, err := device.HeaderProtectionCipher(packet[:HeaderCipherNonceSize])
+	if err != nil {
+		return msgSize, msgType, padding
+	}
+	if cip != nil {
+		var mask [MessageTransportOffsetCounter]byte
+		cip.XORKeyStream(mask[:], mask[:])
+		applyHash(field[:], field[:], mask[MessageTransportOffsetReceiver:])
+	}
+	if device.indexTable.Lookup(binary.LittleEndian.Uint32(field[:])).keypair == nil {
+		return msgSize, msgType, padding
+	}
+	return MessageTransportSize, MessageTransportType, transportPadding
 }
