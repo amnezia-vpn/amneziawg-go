@@ -8,6 +8,7 @@ package device
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -212,6 +213,17 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 			if keepalive := peer.persistentKeepaliveInterval.Load(); !keepalive.IsZero() {
 				sendf("persistent_keepalive_interval=%s", keepalive.ToString())
+			}
+
+			if relay := peer.relay.Load(); relay != nil {
+				if !relay.Key.IsZero() {
+					keyf("relay_key", (*[32]byte)(&relay.Key))
+				}
+				if len(relay.Path) > 0 {
+					path := make([]byte, relay.paddedLen())
+					copy(path, relay.Path)
+					sendf("relay_path=%x", path)
+				}
 			}
 
 			device.allowedips.EntriesForPeer(peer, func(prefix netip.Prefix) bool {
@@ -708,6 +720,14 @@ func (device *Device) handlePeerLine(
 		} else {
 			device.allowedips.Remove(prefix, peer.Peer)
 		}
+
+	case "relay_key", "relay_path", "relay_path_size":
+		device.log.Verbosef("%v - UAPI: Updating %s", peer.Peer, key)
+		relay := *cmp.Or(peer.relay.Load(), &Relay{})
+		if err := relay.set(key, value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set %s: %w", key, err)
+		}
+		peer.relay.Store(&relay)
 
 	case "protocol_version":
 		if value != "1" {
