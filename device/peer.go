@@ -58,6 +58,7 @@ type Peer struct {
 	trieEntries                 list.List
 	persistentKeepaliveInterval AtomicUintRange
 	udpWindow                   atomic.Uint32
+	relay                       atomic.Pointer[Relay]
 }
 
 func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
