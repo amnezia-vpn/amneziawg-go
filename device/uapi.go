@@ -219,10 +219,8 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 				if !relay.Key.IsZero() {
 					keyf("relay_key", (*[32]byte)(&relay.Key))
 				}
-				if len(relay.Path) > 0 {
-					path := make([]byte, relay.paddedLen())
-					copy(path, relay.Path)
-					sendf("relay_path=%x", path)
+				if relay.pathLen > 0 {
+					sendf("relay_path=%x", relay.Path())
 				}
 			}
 
@@ -568,11 +566,18 @@ type ipcSetPeer struct {
 	dummy   bool // dummy reports whether this peer is a temporary, placeholder peer
 	created bool // new reports whether this is a newly created peer
 	pkaOn   bool // pkaOn reports whether the peer had the persistent keepalive turn on
+
+	newRelay *Relay // newRelay is the staged relay config, stored in handlePostConfig
 }
 
 func (peer *ipcSetPeer) handlePostConfig() {
+	newRelay := peer.newRelay
+	peer.newRelay = nil
 	if peer.Peer == nil || peer.dummy {
 		return
+	}
+	if newRelay != nil {
+		peer.relay.Store(newRelay)
 	}
 	if peer.created {
 		peer.endpoint.disableRoaming = peer.device.net.brokenRoaming && peer.endpoint.val != nil
@@ -721,13 +726,15 @@ func (device *Device) handlePeerLine(
 			device.allowedips.Remove(prefix, peer.Peer)
 		}
 
-	case "relay_key", "relay_path", "relay_path_size":
+	case "relay_key", "relay_path":
 		device.log.Verbosef("%v - UAPI: Updating %s", peer.Peer, key)
-		relay := *cmp.Or(peer.relay.Load(), &Relay{})
-		if err := relay.set(key, value); err != nil {
+		if peer.newRelay == nil {
+			relay := *cmp.Or(peer.relay.Load(), &Relay{})
+			peer.newRelay = &relay
+		}
+		if err := peer.newRelay.set(key, value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set %s: %w", key, err)
 		}
-		peer.relay.Store(&relay)
 
 	case "protocol_version":
 		if value != "1" {

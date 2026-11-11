@@ -15,7 +15,7 @@ import (
 
 // openTail decrypts the last n bytes of packet as a relay does.
 func openTail(key, packet []byte, n int) []byte {
-	cip, _ := chacha20.NewUnauthenticatedCipher(key, packet[:chacha20.NonceSize])
+	cip, _ := chacha20.NewUnauthenticatedCipher(key, packet[:HeaderCipherNonceSize])
 	tail := bytes.Clone(packet[len(packet)-n:])
 	cip.XORKeyStream(tail, tail)
 	return tail
@@ -28,11 +28,8 @@ func TestRelaySeal(t *testing.T) {
 	}
 
 	relay := &Relay{}
-	if relay.set("relay_path_size", "8") != nil || relay.set("relay_path", "010203") != nil {
+	if relay.set("relay_path", "0102030000000000") != nil {
 		t.Fatal("failed to set path")
-	}
-	if relay.set("relay_path_size", "65") == nil {
-		t.Fatal("size out of range must fail")
 	}
 	if relay.TailSize() != 0 {
 		t.Fatal("relay without key must be no-op")
@@ -41,16 +38,12 @@ func TestRelaySeal(t *testing.T) {
 	if relay.TailSize() != 8 {
 		t.Fatalf("tail size = %d, want 8", relay.TailSize())
 	}
-
-	other := &Relay{Key: relay.Key}
-	if other.set("relay_path", "010203") != nil || other.set("relay_path_size", "8") != nil || other.TailSize() != 8 {
-		t.Fatal("path before size must work")
+	clone := *relay
+	if clone.set("relay_path", "ff") != nil || relay.TailSize() != 8 || relay.Path()[0] != 1 {
+		t.Fatal("copy must not share path with original")
 	}
-	if relay.set("relay_path_size", "2") != nil || relay.TailSize() != 3 {
-		t.Fatal("path must not be truncated")
-	}
-	if relay.set("relay_path_size", "8") != nil {
-		t.Fatal("failed to restore size")
+	if fresh := (Relay{Key: relay.Key}); fresh.set("relay_path", "ff") != nil || clone != fresh {
+		t.Fatal("set must clear old path bytes")
 	}
 
 	packet := make([]byte, 200)
@@ -82,8 +75,7 @@ func TestRelayDevicePing(t *testing.T) {
 		cfg := uapiCfg(
 			"public_key", hex.EncodeToString(peer.handshake.remoteStatic[:]),
 			"relay_key", hex.EncodeToString(key[:]),
-			"relay_path_size", "10",
-			"relay_path", "0102030405060708",
+			"relay_path", "01020304050607080000",
 		)
 		if err := pair[0].dev.IpcSet(cfg); err != nil {
 			t.Fatal(err)
@@ -94,6 +86,19 @@ func TestRelayDevicePing(t *testing.T) {
 	want := fmt.Sprintf("relay_key=%x\nrelay_path=01020304050607080000\n", key)
 	if !strings.Contains(get, want) {
 		t.Fatalf("IpcGet does not contain relay config:\n%s", get)
+	}
+	for _, peer := range pair[0].dev.peers.keyMap {
+		cfg := uapiCfg(
+			"public_key", hex.EncodeToString(peer.handshake.remoteStatic[:]),
+			"relay_key", hex.EncodeToString(make([]byte, 32)),
+			"relay_path", "zz",
+		)
+		if pair[0].dev.IpcSet(cfg) == nil {
+			t.Fatal("invalid relay path must fail")
+		}
+	}
+	if get, _ := pair[0].dev.IpcGet(); !strings.Contains(get, want) {
+		t.Fatalf("failed set changed relay config:\n%s", get)
 	}
 
 	pair.Send(t, Ping, nil)
