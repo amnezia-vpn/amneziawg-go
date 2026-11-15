@@ -6,7 +6,6 @@
 package device
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -154,9 +153,8 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	crypt := buf[:padding]
 	rand.Read(crypt)
 
-	writer := bytes.NewBuffer(buf[padding:padding])
-	binary.Write(writer, binary.LittleEndian, msg)
-	packet := writer.Bytes()
+	packet := buf[padding : padding+MessageInitiationSize]
+	_ = msg.marshal(packet)
 	peer.cookieGenerator.AddMacs(packet)
 
 	peer.timersAnyAuthenticatedPacketTraversal()
@@ -204,9 +202,8 @@ func (peer *Peer) SendHandshakeResponse() error {
 	crypt := buf[:padding]
 	rand.Read(crypt)
 
-	writer := bytes.NewBuffer(buf[padding:padding])
-	binary.Write(writer, binary.LittleEndian, response)
-	packet := writer.Bytes()
+	packet := buf[padding : padding+MessageResponseSize]
+	_ = response.marshal(packet)
 	peer.cookieGenerator.AddMacs(packet)
 
 	err = peer.BeginSymmetricSession()
@@ -263,9 +260,8 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	crypt := buf[:padding]
 	rand.Read(crypt)
 
-	writer := bytes.NewBuffer(buf[padding:padding])
-	binary.Write(writer, binary.LittleEndian, reply)
-	packet := writer.Bytes()
+	packet := buf[padding : padding+MessageCookieReplySize]
+	_ = reply.marshal(packet)
 
 	cip, err := device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
 	if err != nil {

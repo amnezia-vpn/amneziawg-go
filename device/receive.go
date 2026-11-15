@@ -6,7 +6,6 @@
 package device
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -327,8 +326,7 @@ func (device *Device) RoutineHandshake(id int) {
 			// unmarshal packet
 
 			var reply MessageCookieReply
-			reader := bytes.NewReader(elem.packet)
-			err := binary.Read(reader, binary.LittleEndian, &reply)
+			err := reply.unmarshal(elem.packet)
 			if err != nil {
 				device.log.Verbosef("Failed to decode cookie reply")
 				goto skip
@@ -397,8 +395,7 @@ func (device *Device) RoutineHandshake(id int) {
 		case MessageInitiationType:
 			// unmarshal
 			var msg MessageInitiation
-			reader := bytes.NewReader(elem.packet)
-			err := binary.Read(reader, binary.LittleEndian, &msg)
+			err := msg.unmarshal(elem.packet)
 			if err != nil {
 				device.log.Errorf("Failed to decode initiation message")
 				goto skip
@@ -432,8 +429,7 @@ func (device *Device) RoutineHandshake(id int) {
 			// unmarshal
 
 			var msg MessageResponse
-			reader := bytes.NewReader(elem.packet)
-			err := binary.Read(reader, binary.LittleEndian, &msg)
+			err := msg.unmarshal(elem.packet)
 			if err != nil {
 				device.log.Errorf("Failed to decode response message")
 				goto skip
