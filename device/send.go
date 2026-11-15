@@ -18,6 +18,7 @@ import (
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+	"github.com/amnezia-vpn/amneziawg-go/v3/uidfilter"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -341,6 +342,18 @@ func (device *Device) RoutineReadFromTUN() {
 			elem := elems[i]
 			elem.packet = bufs[i][offset : offset+sizes[i]]
 			elem.padding = padding
+
+			// Strict Split Tunneling: drop outbound packets whose owning app is
+			// disallowed by the split-tunnel policy (issue amnezia-client#2457),
+			// so a bypassing app can't leak into the tunnel. uidfilter.Supported
+			// is false off Android, so this branch and the call compile away
+			// there; on Android with no filter installed it is one atomic load.
+			// Dropping here mirrors the peer==nil path below: the element is
+			// reused for the next read. A packet of a flow not yet judged is
+			// copied and held, and sent later through ReleaseOutboundPacket.
+			if uidfilter.Supported && !device.tun.uidGate.AllowOutboundPacket(elem.packet, device) {
+				continue
+			}
 
 			// lookup peer
 			var peer *Peer
