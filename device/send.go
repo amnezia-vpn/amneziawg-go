@@ -581,6 +581,19 @@ func (device *Device) RoutineEncryption(id int) {
 
 	for elemsContainer := range device.queue.encryption.c {
 		for _, elem := range elemsContainer.elems {
+			// shift packet offset in case of S4 changes
+			if p := device.paddings.transport.Load(); p != elem.padding {
+				oldOffset := int(elem.padding) + MessageTransportHeaderSize
+				newOffset := int(p) + MessageTransportHeaderSize
+				if newOffset+len(elem.packet) > len(elem.buffer) {
+					elem.packet = nil
+					continue
+				}
+				n := copy(elem.buffer[newOffset:], elem.buffer[oldOffset:oldOffset+len(elem.packet)])
+				elem.packet = elem.buffer[newOffset : newOffset+n]
+				elem.padding = p
+			}
+
 			udpWindow := elem.padding + MinMessageSize + uint32(len(elem.packet))
 			if elem.peer.udpWindow.Load() < udpWindow {
 				elem.peer.udpWindow.Store(udpWindow)
@@ -676,6 +689,10 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		dataSent := false
 		elemsContainer.Lock()
 		for _, elem := range elemsContainer.elems {
+			if elem.packet == nil {
+				// encryption failed
+				continue
+			}
 			if !elem.isKeepalive {
 				dataSent = true
 			}
