@@ -8,6 +8,7 @@ package device
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -212,6 +213,15 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 
 			if keepalive := peer.persistentKeepaliveInterval.Load(); !keepalive.IsZero() {
 				sendf("persistent_keepalive_interval=%s", keepalive.ToString())
+			}
+
+			if relay := peer.relay.Load(); relay != nil {
+				if !relay.Key.IsZero() {
+					keyf("relay_key", (*[32]byte)(&relay.Key))
+				}
+				if relay.pathLen > 0 {
+					sendf("relay_path=%x", relay.Path())
+				}
 			}
 
 			device.allowedips.EntriesForPeer(peer, func(prefix netip.Prefix) bool {
@@ -556,11 +566,18 @@ type ipcSetPeer struct {
 	dummy   bool // dummy reports whether this peer is a temporary, placeholder peer
 	created bool // new reports whether this is a newly created peer
 	pkaOn   bool // pkaOn reports whether the peer had the persistent keepalive turn on
+
+	newRelay *Relay // newRelay is the staged relay config, stored in handlePostConfig
 }
 
 func (peer *ipcSetPeer) handlePostConfig() {
+	newRelay := peer.newRelay
+	peer.newRelay = nil
 	if peer.Peer == nil || peer.dummy {
 		return
+	}
+	if newRelay != nil {
+		peer.relay.Store(newRelay)
 	}
 	if peer.created {
 		peer.endpoint.disableRoaming = peer.device.net.brokenRoaming && peer.endpoint.val != nil
@@ -707,6 +724,16 @@ func (device *Device) handlePeerLine(
 			device.allowedips.Insert(prefix, peer.Peer)
 		} else {
 			device.allowedips.Remove(prefix, peer.Peer)
+		}
+
+	case "relay_key", "relay_path":
+		device.log.Verbosef("%v - UAPI: Updating %s", peer.Peer, key)
+		if peer.newRelay == nil {
+			relay := *cmp.Or(peer.relay.Load(), &Relay{})
+			peer.newRelay = &relay
+		}
+		if err := peer.newRelay.set(key, value); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set %s: %w", key, err)
 		}
 
 	case "protocol_version":

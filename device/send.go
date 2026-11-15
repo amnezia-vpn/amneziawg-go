@@ -146,8 +146,10 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
 
+	relay := peer.relay.Load()
+	tailSize := relay.TailSize()
 	padding := int(peer.device.paddings.init.Load())
-	trailerLen := max(peer.randomTrailer(padding+MessageInitiationSize), 0)
+	trailerLen := tailSize + max(peer.randomTrailer(padding+MessageInitiationSize+tailSize), 0)
 
 	buf := make([]byte, padding+MessageInitiationSize+trailerLen)
 
@@ -172,6 +174,9 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	trailer := buf[padding+MessageInitiationSize:]
 	rand.Read(trailer)
+	if err := relay.Seal(buf); err != nil {
+		return err
+	}
 
 	sendBuffer = append(sendBuffer, buf)
 	err = peer.SendBuffers(sendBuffer)
