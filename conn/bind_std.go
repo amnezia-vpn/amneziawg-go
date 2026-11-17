@@ -177,6 +177,7 @@ again:
 		s.ipv4TxOffload, s.ipv4RxOffload = supportsUDPOffload(v4conn)
 		if runtime.GOOS == "linux" || runtime.GOOS == "android" {
 			v4pc = ipv4.NewPacketConn(v4conn)
+			_ = v4pc.SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
 			s.ipv4PC = v4pc
 		}
 		fns = append(fns, s.makeReceiveIPv4(v4pc, v4conn, s.ipv4RxOffload))
@@ -186,6 +187,7 @@ again:
 		s.ipv6TxOffload, s.ipv6RxOffload = supportsUDPOffload(v6conn)
 		if runtime.GOOS == "linux" || runtime.GOOS == "android" {
 			v6pc = ipv6.NewPacketConn(v6conn)
+			_ = v6pc.SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
 			s.ipv6PC = v6pc
 		}
 		fns = append(fns, s.makeReceiveIPv6(v6pc, v6conn, s.ipv6RxOffload))
@@ -366,13 +368,13 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint) error {
 	ua := s.udpAddrPool.Get().(*net.UDPAddr)
 	defer s.udpAddrPool.Put(ua)
 	if is6 {
+		ua.IP = ua.IP[:16]
 		as16 := endpoint.DstIP().As16()
 		copy(ua.IP, as16[:])
-		ua.IP = ua.IP[:16]
 	} else {
+		ua.IP = ua.IP[:4]
 		as4 := endpoint.DstIP().As4()
 		copy(ua.IP, as4[:])
-		ua.IP = ua.IP[:4]
 	}
 	ua.Port = int(endpoint.(*StdNetEndpoint).Port())
 	var (
@@ -526,6 +528,11 @@ func splitCoalescedMessages(msgs []ipv6.Message, firstMsgAt int, getGSO getGSOFu
 			copied := copy(msgs[n].Buffers[0], msg.Buffers[0][start:end])
 			msgs[n].N = copied
 			msgs[n].Addr = msg.Addr
+			if n != i {
+				oobCopied := copy(msgs[n].OOB[:cap(msgs[n].OOB)], msg.OOB[:msg.NN])
+				msgs[n].OOB = msgs[n].OOB[:oobCopied]
+				msgs[n].NN = oobCopied
+			}
 			start = end
 			end += gsoSize
 			if end > msg.N {
