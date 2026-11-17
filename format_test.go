@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -22,7 +23,16 @@ func TestFormatting(t *testing.T) {
 			t.Errorf("unable to walk %s: %v", path, err)
 			return nil
 		}
-		if d.IsDir() || filepath.Ext(path) != ".go" {
+		if d.IsDir() {
+			// Skip directories the go command ignores, such as a GOPATH
+			// that packaging tools place inside the source tree.
+			name := d.Name()
+			if path != "." && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
 			return nil
 		}
 		wg.Add(1)
