@@ -250,6 +250,24 @@ func TestAWGDevicePing(t *testing.T) {
 	})
 }
 
+func TestAWGDevicePingManyJunkPackets(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	// The junk packets and the handshake initiation don't fit into a single
+	// bind batch together.
+	pair := genTestPair(t, true,
+		"jc", fmt.Sprint(conn.IdealBatchSize),
+		"jmin", "32",
+		"jmax", "64",
+	)
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		pair.Send(t, Ping, nil)
+	})
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		pair.Send(t, Pong, nil)
+	})
+}
+
 // Needs to be stopped with Ctrl-C
 func TestAWGHandshakeDevicePing(t *testing.T) {
 	t.Skip("This test is intended to be run manually, not as part of the test suite.")

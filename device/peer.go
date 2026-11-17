@@ -137,15 +137,31 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
-	err := peer.device.net.bind.Send(buffers, endpoint)
-	if err == nil {
+	// A handshake initiation is sent along with the I1-I5 and Jc junk
+	// packets preceding it, which can exceed the bind's batch size.
+	batchSize := max(peer.device.net.bind.BatchSize(), 1)
+	var gsoErr error
+	for len(buffers) > 0 {
+		batch := buffers[:min(len(buffers), batchSize)]
+		buffers = buffers[len(batch):]
+
+		err := peer.device.net.bind.Send(batch, endpoint)
+		if err != nil {
+			var errGSO conn.ErrUDPGSODisabled
+			if !errors.As(err, &errGSO) || errGSO.RetryErr != nil {
+				return err
+			}
+			// The bind resent this batch without GSO; send the rest too.
+			gsoErr = err
+			continue
+		}
 		var totalLen uint64
-		for _, b := range buffers {
+		for _, b := range batch {
 			totalLen += uint64(len(b))
 		}
 		peer.txBytes.Add(totalLen)
 	}
-	return err
+	return gsoErr
 }
 
 func (peer *Peer) String() string {
