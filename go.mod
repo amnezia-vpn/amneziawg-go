@@ -4,7 +4,6 @@ go 1.25.0
 
 require (
 	github.com/goccy/go-yaml v1.17.1
-	go.uber.org/atomic v1.11.0
 	golang.getoutline.org/sdk v0.0.23
 	golang.getoutline.org/sdk/x v0.2.0
 	golang.org/x/crypto v0.42.0

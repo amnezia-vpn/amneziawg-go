@@ -19,10 +19,9 @@ import (
 	"runtime/pprof"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
-
-	"go.uber.org/atomic"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	"github.com/amnezia-vpn/amneziawg-go/v3/conn/bindtest"
@@ -256,7 +255,8 @@ func TestAWGHandshakeDevicePing(t *testing.T) {
 
 	signalContext, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	isRunning := atomic.NewBool(true)
+	var isRunning atomic.Bool
+	isRunning.Store(true)
 	go func() {
 		<-signalContext.Done()
 		fmt.Println("Waiting to finish")
