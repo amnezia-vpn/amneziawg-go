@@ -1,4 +1,4 @@
-//go:build !linux || android
+//go:build (!linux && !freebsd) || android
 
 /* SPDX-License-Identifier: MIT
  *
@@ -21,9 +21,9 @@ func (e *StdNetEndpoint) SrcToString() string {
 	return ""
 }
 
-// TODO: macOS, FreeBSD and other BSDs likely do support the sticky sockets
+// TODO: macOS and other BSDs likely do support the sticky sockets
 // {get,set}srcControl feature set, but use alternatively named flags and need
-// ports and require testing.
+// ports and require testing. FreeBSD is ported, see sticky_freebsd.go.
 
 // getSrcFromControl parses the control for PKTINFO and if found updates ep with
 // the source information found.
