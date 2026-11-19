@@ -25,6 +25,8 @@ When an interface is running, you may use [`amneziawg-tools `](https://github.co
 
 To run with more logging you may set the environment variable `LOG_LEVEL=debug`.
 
+On memory-constrained hosts (e.g. consumer routers with 256–512 MB of RAM) you may bound the internal buffer pools by setting the environment variable `WG_PREALLOCATED_BUFFERS_PER_POOL=1024`. When the bound is reached the receive path waits for a free buffer instead of allocating a new one, so sustained traffic bursts no longer grow the heap without limit (the kernel drops excess UDP, which peers handle as ordinary congestion). The default (`0` on Linux) keeps the historical unbounded behavior; embedders using the `device` package directly can assign `device.PreallocatedBuffersPerPool` before calling `NewDevice`.
+
 ## Platforms
 
 ### Linux
