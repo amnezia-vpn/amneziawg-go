@@ -38,6 +38,21 @@ func main() {
 	)
 	logger.Verbosef("Starting amneziawg-go version %s", Version)
 
+	// Embedding clients may pin the Wintun adapter's GUID and tunnel type.
+	// Without a fixed GUID Wintun picks a random one, and Windows creates a
+	// new network profile (NLA) for every adapter it has never seen.
+	if s := os.Getenv("WG_WINTUN_GUID"); s != "" {
+		guid, err := windows.GUIDFromString(s)
+		if err != nil {
+			logger.Errorf("Invalid WG_WINTUN_GUID: %v", err)
+			os.Exit(ExitSetupFailed)
+		}
+		tun.WintunStaticRequestedGUID = &guid
+	}
+	if s := os.Getenv("WG_WINTUN_TUNNEL_TYPE"); s != "" {
+		tun.WintunTunnelType = s
+	}
+
 	tun, err := tun.CreateTUN(interfaceName, 0)
 	if err == nil {
 		realInterfaceName, err2 := tun.Name()
